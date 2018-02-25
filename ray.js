@@ -3,7 +3,7 @@ let debug = false;
 const EPSILON = 1e-4;
 const MAX_TRACE_DIST = 100;
 const MAX_DEPTH = 10;
-const SUB_SAMPLE = 1;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
+const SUB_SAMPLE = 3;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
 const black = { r: 0, g: 0, b: 0, a: 0 };
 const white = { r: 255, g: 255, b: 255, a: 1 };
 const darkgrey = { r: 64, g: 64, b: 64, a: 1 };
@@ -30,6 +30,8 @@ function vecNormalize(v) { return vecIsZero(v) ? [0, 0, 1] : vecScalar(1 / vecLe
 function vecSqLength(v) { return vecDot(v, v); }
 function vecLength(v) { return Math.sqrt(vecSqLength(v)); }
 
+function colour(col) { return { r: col.r, g: col.g, b: col.b, a: col.a } };
+
 class Shape {
 	constructor() {
 		this.baseColour = darkgrey;
@@ -39,19 +41,22 @@ class Shape {
 }
 
 class Cylinder extends Shape {
-    constructor(centre, axis, height, radius, baseColour, shine) {
-        super();
-        
-        this.type = 'cylinder';
-        this.centre = centre;
-        this.axis = vecNormalize(axis);
-        this.height = height;
-        this.radius = radius;
-        this.baseColour = baseColour || white;
-				this.shine = (shine == undefined) ? 0.8 : shine;
-    }
+  constructor(centre, axis, height, radius, baseColour, shine) {
+		super();
+		
+		this.type = 'cylinder';
+		this.centre = centre;
+		this.axis = vecNormalize(axis);
+		this.height = height;
+		this.radius = radius;
+		this.baseColour = baseColour || white;
+		this.shine = (shine == undefined) ? 0.8 : shine;
+	}
     
-    normal(p) { return vecScalar(1 / this.radius, vecMinus(p, this.centre)); }
+  normal(p) {
+		let v = vecMinus(p, this.centre);
+		return vecScalar(1 / this.radius, vecMinus(v, vecScalar(vecDot(v, this.axis), this.axis)) );
+	}
 }
 
 class Sphere extends Shape {
@@ -112,11 +117,29 @@ class Ray {
 		} else if (shape.type == 'cylinder') {
 			let centre = shape.centre;
 			let axis = shape.axis;
-			let a = 1 - vecDot(this.dir, axis) ** 2;
-			let halfB = vecDot(this.origin, this.dir) - vecDot(this.dir, axis) * vecDot(this.origin, axis) - vecDot(this.dir, centre) + vecDot(centre, axis) * vecDot(this.dir, axis);
-			let c = vecSqLength(this.origin) - 2 * vecDot(this.origin, centre) - vecSqLength(this.origin, axis) ** 2 + 4 * vecDot(centre, axis) * vecDot(this.origin, axis) + vecSqLength(centre) - vecDot(centre, axis) ** 2 - shape.radius * shape.radius;
+			let v = vecMinus(this.origin, centre);
+			
+			let vd = vecDot(v, this.dir);
+			let va = vecDot(v, axis);			
+			let da = vecDot(this.dir, axis);
+
+			let a = 1 - da * da;
+			let halfB = vd - va * da;
+			let c = vecSqLength(v) - va * va - shape.radius * shape.radius;
 
 			let t = qRoots(a, halfB, c);
+
+			if (false) {
+				console.log('ray: ', this.origin, this.dir);
+				console.log('vd: ', vd);
+				console.log('va: ', va);
+				console.log('da: ', da);
+				console.log('a: ', a);
+				console.log('1/2 b: ', halfB);
+				console.log('c: ', c);
+				console.log(t);
+			}
+
 			if (t == undefined || t[0] <= 0) {
 				return undefined;
 			}
@@ -171,7 +194,7 @@ class Scene {
 					new Sphere([-1.1, 1.2, 0.25], 0.25, mauve, 0.45),
 					new Sphere([0.5, 2, 1.25], 1.25, black, 0.3),
 					new Sphere([-1.5, -2.5, 0.8], 0.8, orange, 0.25),
-					//new Cylinder([0, 1.5, 0], [0, 0, 1], 1, 0.2),
+					//new Cylinder([-2.5, 4, 0], [0, 0, 1], 1, 1.5, limegreen, 0.3),
 				];
 				//this.shapes[0].colour = p => { return (Math.abs(p[0]) % 2 < 1) ? deepblue : lightgrey; };
 				this.shapes[0].colour = function(p) {
@@ -198,45 +221,56 @@ class Scene {
 					}
 					return [deeppink, grey, black, deepblue][index];
 				}
-				this.shapes[0].shine = 0.6
-				/*this.shapes[8].colour = function(p) {
-								let costheta1, costheta2;
+				this.shapes[0].shine = 0.1
+				this.shapes[8].colour = function(p) {
+					let costheta1, costheta2;
 					costheta1 = vecDot(vecMinus(p, this.centre), vecNormalize([-1, -1, 0])) / this.radius;
-								if (costheta1 < 0.975) {
-										return black;
-								}
-								costheta1 = vecDot(vecMinus(p, this.centre), vecNormalize([-1, -1, 0.12])) / this.radius;
-								costheta2 = vecDot(vecMinus(p, this.centre), vecNormalize([-1, -1, -0.09])) / this.radius;
-								if ((costheta1 > 0.9970 && costheta1 < 0.9995) || (costheta2 > 0.9940 && costheta2 < 0.9990)) {
-										return black;
-								}
-								return white;            
-				}*/
+					if (costheta1 < 0.905) {
+						return black;
+					}
+					costheta1 = vecDot(vecMinus(p, this.centre), vecNormalize([-1, -1, 0.15])) / this.radius;
+					costheta2 = vecDot(vecMinus(p, this.centre), vecNormalize([-1, -1, -0.12])) / this.radius;
+					if ((costheta1 > 0.9920 && costheta1 < 0.999) || (costheta2 > 0.9900 && costheta2 < 0.9980)) {
+						return black;
+					}
+					return white;            
+				}
+
+				this.camera = new Camera([-0.3, -4, 1], [0, 1, -0.1], [0, 0, 1], this.canvasWidth, this.canvasHeight);
 				break;
 			case 1:
 				this.shapes = [
-					new Cylinder([0, 5, 0], [0, 0, 1], 1, 1),
+					new Plane([0, 0, 0], [0, 0, 1], darkgrey, 0.2),
+					new Cylinder([2, 4, 0], [0, 0, 1], 1, 0.4, deeppink, 0.2),
+					new Cylinder([0, 2, 0], [0, 0, 1], 1, 0.4, mauve, 0.2),
+					new Cylinder([-1, 3, 0], [0, 0, 1], 1, 0.4, deepblue, 0.2),
+					new Cylinder([0, 6, 2], [1, 0, 0], 1, 0.4, limegreen, 0.8),
 				]
+				for (let x = -4; x < 5; x++) {
+					this.shapes.push(new Sphere([x, 6, 0.45], 0.45, white, 0.9));
+				}
+				this.camera = new Camera([-0.3, -6, 3], [0, 1, -0.2], [0, 0, 1], this.canvasWidth, this.canvasHeight);
 				break;
 			case 2:
 				this.shapes = [
 					new Plane([0, 0, 0], [0, 0, 1], orange, 0.15),
-					new Sphere([0.3, 0, 0.9], 0.9, red, 0.80),
-					new Sphere([-1.1, 1.2, 0.25], 0.25, mauve, 0.75),
+					new Cylinder([0, 5, 0], [0, 0, 1], 1, 1, darkgrey, 0.40),
+					new Sphere([0.3, 0, 0.3], 0.3, red, 0.50),
+					new Sphere([-1.1, 1.2, 0.25], 0.25, mauve, 0.35),
 				];
+				this.shapes[0].colour = function(p) {
+					let x = Math.floor(p[0]);
+					let y = Math.floor(p[1]);
+					let index = (x & 1) + (y & 1);
+					return [deeppink, verydarkgrey, mauve][index];
+				}
+				this.camera = new Camera([-0.3, -4, 2], [0, 1, -0.2], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+				break;
 			default:
 				break;
 		}
-		
 
-		for (let j = -5; j <= 5; j++) {
-			for (let i = -5; i <= 5; i++) {
-				this.shapes.push(new Sphere([i, j, 0], 0.125));
-			}
-		}
-
-		//this.camera = new Camera([1, -4, 5], [0, 1, -0.9], [0, 0, 1], this.canvasWidth, this.canvasHeight);
-		this.camera = new Camera([-0.3, -4, 1], [0, 1, -0.1], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+		//this.camera = new Camera([1, -4, 5], [0, 1, -0.9], [0, 0, 1], this.canvasWidth, this.canvasHeight);		
 	}
 
 	projectToCanvas(xyz) {
@@ -252,37 +286,21 @@ class Scene {
 
 		return { x: (u + 1) * this.canvasWidth / 2 - 1, y: (-v + 1) * this.canvasHeight / 2 - 1 };
 	}
-
-	traceRandom() {
-		//for (let canvasY = 0; canvasY < this.canvasHeight; canvasY++) {
-		//	for (let canvasX = 0; canvasX < this.canvasWidth; canvasX++) {
-/*		for (let i = 0; i < 10000 / SUB_SAMPLE ** 2; i++) {
-				let x = this.canvasWidth * Math.random();
-				let	y = this.canvasHeight * Math.random();*/
+    
+	traceTile(tile, tileSize) {
 		let x, y;
-				for (let i = 100 / SUB_SAMPLE ** 2; i--; ) {
-					x = this.canvasWidth * Math.random();
-					y = this.canvasHeight * Math.random();
-	
-				
-				this.traceOnCanvas(x, y);
-				//this.traceOnCanvas(canvasX, canvasY);
-		//	}
+		for (y = 0; y < tileSize; y++) {
+			for (x = 0; x < tileSize; x++) {
+				this.traceOnCanvas(tile[0] + x, tile[1] + y, MAX_TRACE_DIST, MAX_DEPTH);
+			}
 		}
 	}
-    
-    traceTile(tile, tileSize) {
-        let x, y;
-        for (y = 0; y < tileSize; y++) {
-            for (x = 0; x < tileSize; x++) {
-                this.traceOnCanvas(tile[0] + x, tile[1] + y);
-            }
-        }
-    }
 
 	traceOnCanvas(canvasX, canvasY, maxDist, maxDepth) {
 		maxDist = maxDist || MAX_TRACE_DIST;
-		maxDepth = maxDepth || MAX_DEPTH;
+		if (maxDepth == undefined) {
+			maxDepth = MAX_DEPTH;
+		}
 
 		if (debug) {
 			console.log('FIRE THE LASERS');
@@ -302,11 +320,11 @@ class Scene {
 
 				xyz = this.camera.toXYZ([u, v, w]);
 				let origin = this.camera.origin;                
-                // simulate lens: very slow, since subsampling needs to be high enough to avoid graininess
+        // simulate lens: very slow, since subsampling needs to be high enough to avoid graininess
 				/*let lensSample = discSample(0.0025);
 				let origin = this.camera.toXYZ([lensSample.x, lensSample.y, 0));*/
 				ray = new Ray(origin, vecMinus(xyz, origin));
-				rayCol = this.traceRay(ray, maxDist, maxDepth, 1);
+				rayCol = colour(this.traceRay(ray, maxDist, maxDepth, 1));	// wrap it in colour function to prevent overwriting named colours
 
 				totalCol.r += rayCol.r;
 				totalCol.g += rayCol.g;
@@ -354,7 +372,6 @@ class Scene {
 
 			if (debug) {
 				console.log(`hitting shape ${minShape}, a ${this.shapes[minShape].type} with shine ${this.shapes[minShape].shine}`);
-				let intersection = vecPlus(ray.origin, vecScalar(minIntersectionDist, ray.dir));
 				let laserEnd = this.projectToCanvas(intersection);
 				if (laserEnd != undefined && ray.origin != this.camera.origin) {
 					this.ctx.lineTo(laserEnd.x, laserEnd.y);
@@ -368,7 +385,7 @@ class Scene {
 			if (minIntersectionDist < maxDist || depth > 0) {	// bounce!
 				if (vecDot(ray.dir, normal) > 0) {
 					throw new Error("I'm inside a shape?");
-					return;					
+					return black;
 					//reflectedColour = this.traceRay(ray, maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine);
 				} else {
           let reflectDir = vecMinus(ray.dir, vecScalar(2 * vecDot(ray.dir, normal), normal));
@@ -377,10 +394,18 @@ class Scene {
 			}
 
 			for (let component of ["r", "g", "b"]) {
-        let grainy = -2 * SUB_SAMPLE + Math.random() * (4 * SUB_SAMPLE + 1);
-        rayCol[component] = Math.round(grainy + (1 - this.shapes[minShape].shine) * shapeCol[component] + this.shapes[minShape].shine * reflectedColour[component]);
+        let grainy = 0; //-2 * SUB_SAMPLE + Math.random() * (4 * SUB_SAMPLE + 1);
+				rayCol[component] = Math.round(grainy + (1 - this.shapes[minShape].shine) * shapeCol[component] + this.shapes[minShape].shine * reflectedColour[component]);
+				if (rayCol[component] < 0) {
+					rayCol[component] = 0;
+				} else if (rayCol[component] > 255) {
+					rayCol[component] = 255;
+				}
 			}
 			return rayCol;
+		}
+		if (debug) {
+			console.log(`nothing there`);
 		}
 		return verydarkgrey;
 		//let fade = Math.floor(128 * Math.exp(-(maxDist / 100)));
@@ -481,29 +506,28 @@ function main() {
 	ctx.width = canvas.width;
 
 	canvas.addEventListener('mousemove', function(evt) {
-		return;
+		//return;
 		let mousePos = getMousePos(canvas, evt);
         
 		let radius = 100 / SUB_SAMPLE;
 		for (let y = -radius; y <= radius; y++) {
 			for (let x = -radius; x <= radius; x++) {
 				if (x * x + y * y <= radius * radius) {
-					scene.traceOnCanvas(mousePos.x - x, mousePos.y - y, MAX_TRACE_DIST);
+					scene.traceOnCanvas(mousePos.x - x, mousePos.y - y, MAX_TRACE_DIST, MAX_DEPTH);
 				}
 			}
 		}
 	}, false);
 
 	canvas.addEventListener('click', function(evt) {
+		debug = true;
 		let mousePos = getMousePos(canvas, evt);
 
-		/*for (let z = 0; z < 3; z += 0.5) {
+		/*for (let z = 0; z < 3; z ++) {
 			let ray = new Ray([0, 0, z], [0, 1, 0]);
-			console.log(z, ray.intersectDist(scene.shapes[0]));
-		}
-		return;*/
-		
-		debug = true;
+			console.log(z, ray.intersectDist(scene.shapes[1]));
+		}*/
+
 		scene.traceOnCanvas(mousePos.x, mousePos.y, MAX_TRACE_DIST, MAX_DEPTH)
 		debug = false;
 		
@@ -535,7 +559,7 @@ function main() {
 	}, false);
     
  	let scene = new Scene(ctx);
-	scene.loadDefault(2);
+	scene.loadDefault(0);
 	//return;
 
 	/*for (let i = 0; i < 1000; i++) {
@@ -548,19 +572,20 @@ function main() {
 	let tiles = [];
 	let tileSize = Math.floor(200 / SUB_SAMPLE ** 2);
 	for (let y = 0; y < canvas.height / tileSize; y++) {
-			for (let x = 0; x < canvas.width / tileSize; x++) {
-					tiles.push([x * tileSize, y * tileSize]);
-			}
+		for (let x = 0; x < canvas.width / tileSize; x++) {
+			tiles.push([x * tileSize, y * tileSize]);
+		}
 	}
 	tiles = shuffle(tiles);
-	
+
+	//return;
+
 	let trace = setInterval(function() {
-			if (tiles.length) {
-					let tile = tiles.pop();
-					scene.traceTile(tile, tileSize);
-					//scene.traceRandom();
-			} else {
-					clearInterval(trace);
-			}        
+		if (tiles.length) {
+			let tile = tiles.pop();
+			scene.traceTile(tile, tileSize);
+		} else {
+			clearInterval(trace);
+		}        
 	}, 10);
 }
