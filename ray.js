@@ -2,8 +2,8 @@ let debug = false;
 
 const EPSILON = 1e-10;
 const MAX_TRACE_DIST = 100;
-const MAX_DEPTH = 10;
-const SUB_SAMPLE = 2;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
+const MAX_DEPTH = 20;
+const SUB_SAMPLE = 1;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
 
 // --------------------------------
 //            colours
@@ -23,6 +23,7 @@ const COL_SKY_BLUE = { r: 128, g: 128, b: 224, a: 1 };
 const COL_WARM_GREY = { r: 144, g: 128, b: 128, a: 1 };
 const COL_ORANGE = { r: 224, g: 124, b: 32 };
 const COL_DEEP_PINK = { r: 255, g: 32, b: 144 };
+const COL_COPPER = { r: 174, g: 105, b: 56 };
 
 // --------------------------------
 //            materials
@@ -107,6 +108,38 @@ class Plane extends Shape {
 	normal() { return this.normalDir; }
 }
 
+class Triangle extends Shape {
+	constructor(vtxA, edgeAB, edgeAC, baseColour, shine) {
+		super();
+
+		this.type = 'triangle';
+		this.vtxA = vtxA;
+		this.edgeAB = edgeAB;
+		this.edgeAC = edgeAC;
+		this.normalDir = vecNormalize(vecCross(this.edgeAB, this.edgeAC));
+		this.baseColour = baseColour || COL_LIME_GREEN;
+		this.shine = (shine == undefined) ? 0.2 : shine;
+	}
+
+	normal() { return this.normalDir; }
+}
+
+class Square extends Shape {	// actually a parallelogram
+	constructor(vtxA, edgeAB, edgeAC, baseColour, shine) {
+		super();
+
+		this.type = 'square';
+		this.vtxA = vtxA;
+		this.edgeAB = edgeAB;
+		this.edgeAC = edgeAC;
+		this.normalDir = vecNormalize(vecCross(this.edgeAB, this.edgeAC));
+		this.baseColour = baseColour || COL_DEEP_PINK;
+		this.shine = (shine == undefined) ? 0.35 : shine;
+	}
+
+	normal() { return this.normalDir; }
+}
+
 class Ray {
 	constructor(origin, dir) {
 		this.origin = origin;
@@ -123,17 +156,13 @@ class Ray {
 			}
 
 			let t = vecDot(vecMinus(a, this.origin), n) / vecDot(this.dir, n);
-			return t > 0 ? t : undefined;
+			return t > EPSILON ? t : undefined;
 		} else if (shape.type == 'sphere') {
 			let a = 1;
 			let halfB = vecDot(this.dir, vecMinus(this.origin, shape.centre));
 			let c = vecSqLength(vecMinus(this.origin, shape.centre)) - shape.radius * shape.radius;
 
 			let t = qRoots(a, halfB, c);
-			/*if (t == undefined || t[0] <= 0) {
-				return undefined;
-			}
-			return t[0];*/
 			if (t == undefined) {
 				return undefined;
 			} else {
@@ -161,22 +190,53 @@ class Ray {
 
 			let t = qRoots(a, halfB, c);
 
-			if (false) {
-				console.log('ray: ', this.origin, this.dir);
-				console.log('vd: ', vd);
-				console.log('va: ', va);
-				console.log('da: ', da);
-				console.log('a: ', a);
-				console.log('1/2 b: ', halfB);
-				console.log('c: ', c);
-				console.log(t);
-			}
-
 			if (t == undefined || t[0] <= 0) {
 				return undefined;
 			}
 			return t[0];
-    }
+    } else if (shape.type == 'triangle') {
+			// Möller-Trumbore algorithm
+			let h = vecCross(this.dir, shape.edgeAC);
+			let a = vecDot(shape.edgeAB, h);
+    	if (a > -EPSILON && a < EPSILON) {
+				return undefined;
+			}
+    	let f = 1 / a;
+    	let s = vecMinus(this.origin, shape.vtxA);
+    	let u = f * vecDot(s, h);
+    	if (u < 0 || u > 1) {
+				return false;
+			}
+			let q = vecCross(s, shape.edgeAB);
+			let v = f * vecDot(this.dir, q);
+    	if (v < 0 || u + v > 1) {
+				return undefined;
+			}
+
+			let t = f * vecDot(shape.edgeAC, q);
+			return (t > EPSILON) ? t : undefined;
+		} else if (shape.type == 'square') {
+			// Möller-Trumbore algorithm
+			let h = vecCross(this.dir, shape.edgeAC);
+			let a = vecDot(shape.edgeAB, h);
+    	if (a > -EPSILON && a < EPSILON) {
+				return undefined;
+			}
+    	let f = 1 / a;
+    	let s = vecMinus(this.origin, shape.vtxA);
+    	let u = f * vecDot(s, h);
+    	if (u < 0 || u > 1) {
+				return false;
+			}
+			let q = vecCross(s, shape.edgeAB);
+			let v = f * vecDot(this.dir, q);
+    	if (v < 0 || v > 1) {
+				return undefined;
+			}
+
+			let t = f * vecDot(shape.edgeAC, q);
+			return (t > EPSILON) ? t : undefined;
+		}
 	}
 }
 
@@ -319,12 +379,82 @@ class Scene {
 				break;
 			case 2:
 				this.shapes = [
-					new Plane([0, 0, -1], [0, 0, 1], COL_GREY, 0.1),
-					new Sphere([0, 0, 0], 1, COL_RED, 0.5)
+					new Plane([0, 0, 0], [0, 0, 1], COL_GREY, 0.3),
+					new Sphere([-0.5, -2, 1], 1, COL_RED, 0.99),
+					new Sphere([3, 2, 4], 4, COL_LIME_GREEN, 0.7),
+
+					new Square([-2, 2, 0], [1, 0, 0], [0, 0, 2.15], COL_DEEP_BLUE),
+					new Square([-1, 2, 0], [0, 1, 0], [0, 0, 2.15], COL_DEEP_BLUE),
+					new Square([-1, 3, 0], [-1, 0, 0], [0, 0, 2.15], COL_DEEP_BLUE),
+					new Square([-2, 3, 0], [0, -1, 0], [0, 0, 2.15], COL_DEEP_BLUE),
+					new Square([-2, 2, 2.15], [1, 0, 0], [0, 1, 0], COL_DEEP_BLUE),
+					new Square([-1, 3, 0], [0, -1, 0], [-1, 0, 0]),
+
+					/*new Sphere([-2, 0, 2], 0.1, COL_WARM_GREY, 0.95),
+					new Sphere([-2, 1, 2], 0.1, COL_WARM_GREY, 0.95),
+					new Sphere([-1, 1, 2], 0.1, COL_WARM_GREY, 0.95),
+					new Sphere([-1, 0, 2], 0.1, COL_WARM_GREY, 0.95),*/
+
+					new Square([-2, -0.5, 0], [2, -0.3, 0], [0, 0, 2], COL_WHITE, 0.9),
+					new Square([-2, -0.5, 0], [0, 0, 2], [2, 0.3, 0], COL_WHITE, 0.9),
+					new Triangle([-2, -0.5, 2], [2, -0.3, 0], [2, 0.3, 0], COL_WHITE, 0.9),
+					new Square([0, -0.8, 0], [0, 0.6, 0], [0, 0, 2], COL_WHITE, 0.9),
 				];
 				this.shapes[1].material = MAT_GLASS;
+				/*this.shapes[9].material = MAT_GLASS;
+				this.shapes[10].material = MAT_GLASS;
+				this.shapes[11].material = MAT_GLASS;
+				this.shapes[12].material = MAT_GLASS;
+				/*this.shapes[13].material = MAT_GLASS;
+				this.shapes[14].material = MAT_GLASS;
+				this.shapes[15].material = MAT_GLASS;
+				this.shapes[16].material = MAT_GLASS;*/
 
-				this.camera = new Camera([-0.3, -6, 1.5], [0, 1, -0.2], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+				this.shapes[0].colour = function(p) {				
+					let index = 1 + ((Math.floor((p[0] + 0.7) / 37.2) + Math.floor((p[1] + 14.2) / 37.2)) & 1);
+					return [COL_DEEP_PINK, COL_GREY, COL_BLACK, COL_DEEP_BLUE][index];
+				}
+
+				this.camera = new Camera([-3.3, -8, 2.5], [0.4, 1, -0.2], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+			case 3:
+				this.shapes = [
+					new Plane([0, 0, 0], [0, 0, 1], COL_GREY, 0.3),
+					//new Sphere([-0.5, -2, 1], 1, COL_RED, 0.99),
+					new Sphere([3, 2, 4], 4, COL_COPPER, 0.7),
+
+					new Square([-2.5, 2, 0], [1, 0, 0], [0, 0, 2.15], COL_SILVER),
+					new Square([-1.5, 2, 0], [0, 1, 0], [0, 0, 2.15], COL_SILVER),
+					new Square([-1.5, 3, 0], [-1, 0, 0], [0, 0, 2.15], COL_SILVER),
+					new Square([-2.5, 3, 0], [0, -1, 0], [0, 0, 2.15], COL_SILVER),
+					new Square([-2.5, 2, 2.15], [1, 0, 0], [0, 1, 0], COL_SILVER),
+					new Square([-1.5, 3, 0], [0, -1, 0], [-1, 0, 0], COL_SILVER),
+
+					/*new Sphere([-2, 0, 2], 0.1, COL_WARM_GREY, 0.95),
+					new Sphere([-2, 1, 2], 0.1, COL_WARM_GREY, 0.95),
+					new Sphere([-1, 1, 2], 0.1, COL_WARM_GREY, 0.95),
+					new Sphere([-1, 0, 2], 0.1, COL_WARM_GREY, 0.95),*/
+
+					new Square([-2, -0.5, 0], [2, -0.3, 0], [0, 0, 2], COL_WHITE, 0.9),
+					new Square([-2, -0.5, 0], [0, 0, 2], [2, 0.3, 0], COL_WHITE, 0.9),
+					new Triangle([-2, -0.5, 2], [2, -0.3, 0], [2, 0.3, 0], COL_WHITE, 0.9),
+					new Square([0, -0.8, 0], [0, 0.6, 0], [0, 0, 2], COL_WHITE, 0.9),
+				];
+				//this.shapes[1].material = MAT_GLASS;
+				/*this.shapes[9].material = MAT_GLASS;
+				this.shapes[10].material = MAT_GLASS;
+				this.shapes[11].material = MAT_GLASS;
+				this.shapes[12].material = MAT_GLASS;
+				/*this.shapes[13].material = MAT_GLASS;
+				this.shapes[14].material = MAT_GLASS;
+				this.shapes[15].material = MAT_GLASS;
+				this.shapes[16].material = MAT_GLASS;*/
+
+				this.shapes[0].colour = function(p) {				
+					let index = 1 + ((Math.floor((p[0] + 0.7) / 37.2) + Math.floor((p[1] + 14.2) / 37.2)) & 1);
+					return [COL_DEEP_PINK, COL_GREY, COL_BLACK, COL_DEEP_BLUE][index];
+				}
+
+				this.camera = new Camera([-3.3, -8, 2.5], [0.4, 1, -0.2], [0, 0, 1], this.canvasWidth, this.canvasHeight);
 			default:
 				break;
 		}
@@ -445,7 +575,7 @@ class Scene {
 
 			let rayCol = { r: 0, g: 0, b: 0, a: 1 };
 
-			let reflectedColour = shapeCol;
+			let transmittedColour = shapeCol;
 			if (minIntersectionDist < maxDist || depth > 0) {	// hit something: reflect or refract
 				let cosTheta1	= -vecDot(ray.dir, normal);
 				if (this.shapes[minShape].material == MAT_OPAQUE) {					
@@ -458,14 +588,18 @@ class Scene {
 						this.ctx.beginPath();
 						this.ctx.arc(proj.x, proj.y, 10, 0, 2 * Math.PI);
 						this.ctx.stroke();
-						return undefined;
+						return (minIntersectionDist < 1e5) ? undefined : COL_BLACK;	// if it's far away, probably doesn't matter
+						//return undefined;
 					} else {
 						let reflectDir = vecPlus(ray.dir, vecScalar(2 * cosTheta1, normal));
-						reflectedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine, material_stack);
+						transmittedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine, material_stack);
 					}					
 				} else {
 					let eta1 = refr_index[material_stack[material_stack.length - 1]];		// current medium
 					let eta2 = (vecDot(ray.dir, normal) < 0) ? refr_index[this.shapes[minShape].material] : refr_index[material_stack[material_stack.length - 2]];	// enter or exit medium
+					if (eta2 == undefined) {
+						//throw new Error("exited all materials: check consistency of objects")
+					}
 					let etaRatio = eta1 / eta2;					
 					let cosTheta2Sq = 1 - etaRatio * etaRatio * (1 - cosTheta1 * cosTheta1);
 					if (debug) {
@@ -476,7 +610,7 @@ class Scene {
 							console.log(`total internal reflection`);
 						}
 						let reflectDir = vecPlus(ray.dir, vecScalar(2 * cosTheta1, normal));
-						reflectedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine, material_stack);
+						transmittedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine, material_stack);
 					} else {
 						let plusMinus = (cosTheta1 < 0) ? -1 : 1;		// used in refractDir to make sure angle is right depending on whether we're entering or exiting (because normal points out of surface)
 						let refractDir = vecPlus(vecScalar(etaRatio, ray.dir), vecScalar(etaRatio * cosTheta1 - plusMinus * Math.sqrt(cosTheta2Sq), normal));
@@ -498,7 +632,18 @@ class Scene {
 							console.log(`refract at ${intersection}`);
 							console.log(`    in dir ${refractDir}`);
 						}
-						reflectedColour = this.traceRay(new Ray(intersection, refractDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine, material_stack);
+						//let reflectDir = vecPlus(ray.dir, vecScalar(2 * cosTheta1, normal));
+						let reflectance = 0.0;
+						let reflectedColour = COL_WHITE;
+						//let reflectedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, reflectance * importance * this.shapes[minShape].shine, material_stack);
+						
+						let refractedColour = this.traceRay(new Ray(intersection, refractDir), maxDist - minIntersectionDist, depth - 1, (1 - reflectance) * importance * this.shapes[minShape].shine, material_stack);
+						
+						for (let component of ["r", "g", "b"]) {
+							//transmittedColour[component] = Math.round(reflectance * reflectedColour[component] + (1 - reflectance) * refractedColour[component]);
+							//transmittedColour[component] = 255; // refractedColour[component];
+						}
+						transmittedColour = refractedColour;
 					}
 				}
 
@@ -506,13 +651,14 @@ class Scene {
 					//return COL_BLACK;
 				} else {
           let reflectDir = vecMinus(ray.dir, vecScalar(2 * vecDot(ray.dir, normal), normal));
-					reflectedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine);
+					transmittedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine);
 				}*/
 			}
 
 			for (let component of ["r", "g", "b"]) {
-        let grainy = 0; //-2 * SUB_SAMPLE + Math.random() * (4 * SUB_SAMPLE + 1);
-				rayCol[component] = Math.round(grainy + (1 - this.shapes[minShape].shine) * shapeCol[component] + this.shapes[minShape].shine * reflectedColour[component]);
+        //let grainy = -2 * SUB_SAMPLE + Math.random() * (4 * SUB_SAMPLE + 1);
+        let grainy = -4 * SUB_SAMPLE + Math.random() * (8 * SUB_SAMPLE + 1);
+				rayCol[component] = Math.round(grainy + (1 - this.shapes[minShape].shine) * shapeCol[component] + this.shapes[minShape].shine * transmittedColour[component]);
 				if (rayCol[component] < 0) {
 					rayCol[component] = 0;
 				} else if (rayCol[component] > 255) {
@@ -677,7 +823,7 @@ function main() {
 	}, false);
     
  	let scene = new Scene(ctx);
-	scene.loadPreset(1);
+	scene.loadPreset(3);
 	//return;
 
 	/*for (let i = 0; i < 1000; i++) {
