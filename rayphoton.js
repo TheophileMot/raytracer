@@ -4,10 +4,15 @@ const EPSILON = 1e-6;
 const LITTLE_SPACE = 1e-3;	// let's leave room between things, e.g., don't put them right on the floor. Used automatically in object constructors, not primitives: e.g., use Ball instead of Sphere
 const MAX_TRACE_DIST = 5;
 const MAX_DEPTH = 20;
-const SUB_SAMPLE = 5;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
-const NUM_PHOTONS_DIFFUSE = 100000;
-const NUM_PHOTONS_CAUSTIC = 100000;
-const LIGHT_PATHS_PER_SOURCE_PER_RAY = 2;	// normally keep this at 1 since it is redundant with subsampling. Shoot this many paths towards light sources for direct lighting; in practice it doesn't offer real benefits, just slows down
+const SUB_SAMPLE = 1;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
+const SUPER_SAMPLE_BASE = 4; // to get approximate picture at first, but total rendering time is around SSB / (SSB - 1) times longer than if we just started at 1:1 size
+const NUM_PHOTONS_DIFFUSE = 10000;
+const NUM_PHOTONS_CAUSTIC = 10000;
+const LIGHT_PATHS_PER_SOURCE_PER_RAY = 1;	// normally keep this at 1 since it is redundant with subsampling. Shoot this many paths towards light sources for direct lighting; in practice it doesn't offer real benefits, just slows down
+const CAUSTIC_RADIUS = 0.25;
+const DIFFUSE_RADIUS = 0.25;
+const CAUSTIC_AREA = Math.PI * CAUSTIC_RADIUS ** 2;
+const DIFFUSE_AREA = Math.PI * DIFFUSE_RADIUS ** 2;
 
 // --------------------------------
 //            colours
@@ -881,7 +886,7 @@ class Scene {
 					new Plane([-4, 0, 0], [1, 0, 0], COL_RED, MAT_PLASTER),
 					new Plane([0, 0, 8], [0, 0, -1], COL_DARK_GREY, MAT_PLASTER),
 				]
-				for (let b = 0; b < 3; b++) {
+				for (let b = 0; b < 0; b++) {
 					let centreX = 7 * Math.random() - 3.5;
 					let centreY = 7 * Math.random() - 3.5;
 					let centreZ = 5 * Math.random() + 1.0;
@@ -917,10 +922,12 @@ class Scene {
 					new Ball(this.shapes, [centreX, centreY, centreZ], radius, colour, material);
 				}
 				
-				new Spotlight(this.shapes, this.lights, [-1.5, -1, 6.75], 1, [0.5, 0.1, -1], 40);
+				new Ball(this.shapes, [-2.5, 2.5, 1], 1, COL_WHITE, MAT_GLASS);
+				new Ball(this.shapes, [0, 2.5, 1], 1, COL_ROBINS_EGG_BLUE, MAT_PLASTER);
+				new Ball(this.shapes, [2.5, 2.5, 1], 1, COL_COPPER, MAT_COPPER);
+				new Spotlight(this.shapes, this.lights, [-1.5, 0.5, 6.5], 0.25, [0.1, 0.3, -1], 40);
 
-				new Ball (this.shapes, [-2.5, 2.5, 1], 1, COL_WHITE, MAT_GLASS);
-				new Spotlight(this.shapes, this.lights, [-2.5, 2.5, 2.5], 1, [0, 0, -1], 40);
+				new Box(this.shapes, [-3.75, -3.5, 0], [7.5, 4, 0], [-0.2, 0.375, 0], [0, 0, 4], COL_WHITE, MAT_GLASS);
 
 				this.camera = new Camera([0, -13.6, 4.5], [0, 1, -0.1], [0, 0, 1], this.canvasWidth, this.canvasHeight);
 				break;
@@ -1176,16 +1183,15 @@ class Scene {
 		return { x: (u + 1) * this.canvasWidth / 2 - 1, y: (-v + 1) * this.canvasHeight / 2 - 1 };
 	}
     
-	traceTile(tile, tileSize) {
-		let x, y;
-		for (y = 0; y < tileSize; y++) {
-			for (x = 0; x < tileSize; x++) {
-				this.traceOnCanvas(tile[0] + x, tile[1] + y);
+	traceTile(tile, tileSize, superSampleScale) {
+		for (let y = 0; y < tileSize; y += SUPER_SAMPLE_BASE ** superSampleScale) {
+			for (let x = 0; x < tileSize; x += SUPER_SAMPLE_BASE ** superSampleScale) {
+				this.traceOnCanvas(tile[0] + x, tile[1] + y, superSampleScale);
 			}
 		}
 	}
 
-	traceOnCanvas(canvasX, canvasY) {
+	traceOnCanvas(canvasX, canvasY, superSampleScale) {
 		if (debug) {
 			console.log('FIRE THE LASERS');
 		}
@@ -1220,7 +1226,8 @@ class Scene {
 		rayCol.g = Math.floor(totalCol.g / (SUB_SAMPLE * SUB_SAMPLE));
 		rayCol.b = Math.floor(totalCol.b / (SUB_SAMPLE * SUB_SAMPLE));
 		rayCol.a = Math.floor(totalCol.a / (SUB_SAMPLE * SUB_SAMPLE));
-		putPixel(this.ctx, rayCol, canvasX, canvasY);
+
+		putPixel(this.ctx, rayCol, canvasX, canvasY, superSampleScale);
 	}
 
 	traceRay(ray, maxDist, depth, importance, materialStack) {
@@ -1327,9 +1334,9 @@ class Scene {
 							//transmittedColour = this.traceRay(new Ray(intersection, perturbDir), maxDist - minIntersectionDist, depth + 1, importance * minShape.reflectance, materialStack);
 						}
 						
-						let dRad = 0.25 //+ 2 * this.photonKdTDiffuse.nearestNeighbourAndDistance(intersection)[1]; // diffuse search radius: find nearest photon then search in a larger radius around it
+						//let dRad = 0.25 //+ 2 * this.photonKdTDiffuse.nearestNeighbourAndDistance(intersection)[1]; // diffuse search radius: find nearest photon then search in a larger radius around it
 						let photonDiffuseColour = { r: 0, g: 0, b: 0, a: 1 };
-						let nearPhotonsDiffuse = this.photonKdTDiffuse.nearestNeighbours(intersection, dRad);
+						let nearPhotonsDiffuse = this.photonKdTDiffuse.nearestNeighbours(intersection, DIFFUSE_RADIUS);
 						/*let dRad = 0.5	// diffuse search radius
 						let nearPhotonsDiffuse = [];
 						for (let attempt = 0; attempt < 10; attempt++) {							
@@ -1350,9 +1357,9 @@ class Scene {
               }
 						}
 
-						let cRad = 0.025 //+ 2 * this.photonKdTCaustic.nearestNeighbourAndDistance(intersection)[1]; // diffuse search radius: find nearest photon then search in a larger radius around it
+						//let cRad = 0.25 //+ 2 * this.photonKdTCaustic.nearestNeighbourAndDistance(intersection)[1]; // diffuse search radius: find nearest photon then search in a larger radius around it
 						let photonCausticColour = { r: 0, g: 0, b: 0, a: 1 };
-						let nearPhotonsCaustic = this.photonKdTCaustic.nearestNeighbours(intersection, cRad);
+						let nearPhotonsCaustic = this.photonKdTCaustic.nearestNeighbours(intersection, CAUSTIC_RADIUS);
 						/*let cRad = 0.05	// caustic search radius
 						let nearPhotonsCaustic = [];
 						for (let attempt = 0; attempt < 10; attempt++) {
@@ -1373,19 +1380,19 @@ class Scene {
               }
             }
             for (let component of ["r", "g", "b"]) {
-							photonDiffuseColour[component] *= localColour[component] / 255;
               //photonDiffuseColour[component] /= (Math.PI * Math.PI * dRad * dRad);	// should there be an extra factor of pi because Lambertian diffusion is (maximum) 1/pi in all directions?
-							photonDiffuseColour[component] /= (Math.PI * dRad * dRad);	// should there be an extra factor of pi because Lambertian diffusion is (maximum) 1/pi in all directions?
+							photonDiffuseColour[component] *= localColour[component] / 255;
+							photonDiffuseColour[component] /= DIFFUSE_AREA; // (Math.PI * dRad * dRad);
 							
-							//photonCausticColour[component] *= localColour[component] / 255;
-              photonCausticColour[component] /= (Math.PI * cRad * cRad);
+							photonCausticColour[component] *= localColour[component] / 255;
+              photonCausticColour[component] /= CAUSTIC_AREA; // (Math.PI * cRad * cRad);
             }
 
 						for (let component of ["r", "g", "b"]) {
 							rayCol[component] = (1 - minShape.reflectance) * directColour[component];
 							rayCol[component] += transmittedColour[component];
               rayCol[component] += photonDiffuseColour[component];
-							//rayCol[component] += photonCausticColour[component];
+							rayCol[component] += photonCausticColour[component];
 						}
 						return rayCol;
 					}
@@ -1501,14 +1508,15 @@ function splat(ctx, colour, x, y, size) {
 	ctx.fill();
 }
 
-function putPixel(ctx, colour, x, y) {
+function putPixel(ctx, colour, x, y, superSampleScale) {
+	let s = (superSampleScale == undefined) ? 1 : SUPER_SAMPLE_BASE ** superSampleScale;
 	/*if (Math.random() < 0.25) {
 		ctx.fillStyle = "rgba(" + colour.r + "," + colour.g + "," + colour.b + "," + 0.125 * colour.a + ")";
 		ctx.fillRect(x - 10, y - 10, 21, 21);
 	}*/
 
 	ctx.fillStyle = "rgba(" + colour.r + "," + colour.g + "," + colour.b + "," + colour.a + ")";
-	ctx.fillRect(x, y, 1, 1);
+	ctx.fillRect(x, y, s, s);
 }
 
 function discSample(centre, radius, normalDir) {
@@ -1604,77 +1612,22 @@ function main() {
 		}
 
 		if (key == 32) {	// space
-      console.log(scene.camera);
+      //console.log(scene.camera);
       if (drawing) {
         drawing = false;
         clearInterval(trace);        
       } else {
-        drawing = true;
-        
-        let tiles = [];
-        let tileSize = Math.floor(10 / SUB_SAMPLE);
-                
-        // count photons (projected onto canvas) per tile to guess which tiles are more interesting; we'll draw high photon tiles first
-        // photons also contribute to neighbouring cells, so a cell beside a high-photon cell is also interesting
-        let tilePhotons = [];
-        let tilesX = Math.floor(canvas.width / tileSize) + 1;   //add 1 in case tileSize doesn't divide canvas dimensions
-        let tilesY = Math.floor(canvas.height / tileSize) + 1;  // "
-        for (let photon of scene.photonListDiffuse) {
-          let proj = scene.projectToCanvas(photon.origin);
-          if (proj != undefined) {
-            let regionX = Math.floor(proj.x / tileSize);
-            let regionY = Math.floor(proj.y / tileSize);
-            for (let j = -1; j <= 1; j++) {
-              for (let i = -1; i <= 1; i++) {
-                let x = regionX + i;
-                let y = regionY + j;
-                if (regionX >= 0 && regionX < tilesX && regionY >= 0 && regionY < tilesY) {              
-                  if (tilePhotons[y * tilesX + x] == undefined) { tilePhotons[y * tilesX + x] = 0; }
-                  tilePhotons[y * tilesX + x]++;
-                }
-              }
-            }
-          }
-        }
-        for (let photon of scene.photonListCaustic) {
-          let proj = scene.projectToCanvas(photon.origin);
-          if (proj != undefined) {
-            let x = Math.floor(proj.x / tileSize);
-            let y = Math.floor(proj.y / tileSize);
-            if (x >= 0 && x < tilesX && y >= 0 && y < tilesY) {
-              if (tilePhotons[y * tilesX + x] == undefined) { tilePhotons[y * tilesX + x] = 0; }
-              tilePhotons[y * tilesX + x]++;
-            }
-          }        
-        }
-        
-        // create tiles and sort them        
-        for (let y = 0; y < tilesY; y++) {
-          for (let x = 0; x < tilesX; x++) {
-            tiles.push({ region: [x * tileSize, y * tileSize], photons: tilePhotons[y * tilesX + x] || 0 });
-          }
-				}
-				shuffle(tiles);	// shuffle first so that when it gets to all the (e.g.) 1-photon tiles, it doesn't just go row by row
-        tiles.sort( (a, b) => a.photons - b.photons );
-
-        trace = setInterval(function() {
-          if (tiles.length && drawing) {
-            let tile = tiles.pop();
-            scene.traceTile(tile.region, tileSize);
-          } else {
-						drawing = false;
-            clearInterval(trace);
-          }
-        }, 10);
-      }      
+				drawing = true;
+				superSampleTiles(3);	// draw very approximate picture, then more and more accurate
+      }
 		}
-
-  }, false);
+	}, false);
+	
 	canvas.addEventListener('mousemove', function(evt) {
 		//return;
 		let mousePos = getMousePos(canvas, evt);
         
-		let radius = 50 / SUB_SAMPLE;
+		let radius = 10 / SUB_SAMPLE;
 		for (let y = -radius; y <= radius; y++) {
 			for (let x = -radius; x <= radius; x++) {
 				if (x * x + y * y <= radius * radius) {
@@ -1722,7 +1675,71 @@ function main() {
 			}
 		}*/
 	}, false);
-    
+
+	function superSampleTiles(scale) {        
+		let tiles = [];
+		let tileSize = Math.floor(SUPER_SAMPLE_BASE ** scale * 20 / SUB_SAMPLE);
+						
+		// count photons (projected onto canvas) per tile to guess which tiles are more interesting; we'll draw high photon tiles first
+		// photons also contribute to neighbouring cells, so a cell near a high-photon cell is also interesting (this will help give context, e.g., shadows beside bright objects)
+		let tilePhotons = [];
+		let tilesX = Math.floor(canvas.width / tileSize) + 1;   //add 1 in case tileSize doesn't divide canvas dimensions
+		let tilesY = Math.floor(canvas.height / tileSize) + 1;  // "
+		for (let photon of scene.photonListDiffuse) {
+			let proj = scene.projectToCanvas(photon.origin);
+			if (proj != undefined) {
+				let regionX = Math.floor(proj.x / tileSize);
+				let regionY = Math.floor(proj.y / tileSize);
+				for (let j = -2; j <= 2; j++) {
+					for (let i = -2; i <= 2; i++) {
+						if (i * i + j * j < 8) {
+							let x = regionX + i;
+							let y = regionY + j;
+							if (regionX >= 0 && regionX < tilesX && regionY >= 0 && regionY < tilesY) {              
+								if (tilePhotons[y * tilesX + x] == undefined) { tilePhotons[y * tilesX + x] = 0; }
+								tilePhotons[y * tilesX + x]++;
+							}
+						}
+					}
+				}
+			}
+		}
+		for (let photon of scene.photonListCaustic) {
+			let proj = scene.projectToCanvas(photon.origin);
+			if (proj != undefined) {
+				let x = Math.floor(proj.x / tileSize);
+				let y = Math.floor(proj.y / tileSize);
+				if (x >= 0 && x < tilesX && y >= 0 && y < tilesY) {
+					if (tilePhotons[y * tilesX + x] == undefined) { tilePhotons[y * tilesX + x] = 0; }
+					tilePhotons[y * tilesX + x]++;
+				}
+			}        
+		}
+		
+		// create tiles and sort them        
+		for (let y = 0; y < tilesY; y++) {
+			for (let x = 0; x < tilesX; x++) {
+				tiles.push({ region: [x * tileSize, y * tileSize], photons: tilePhotons[y * tilesX + x] || 0 });
+			}
+		}
+		shuffle(tiles);	// shuffle first so that when it gets to all the (e.g.) 1-photon tiles, it doesn't just go row by row
+		tiles.sort( (a, b) => a.photons - b.photons );
+
+		trace = setInterval(function() {
+			if (tiles.length && drawing) {
+				let tile = tiles.pop();
+				scene.traceTile(tile.region, tileSize, scale);
+			} else {
+				clearInterval(trace);
+				if (scale > 0) {
+					superSampleTiles(scale - 1);
+				} else {
+					drawing = false;
+				}
+			}
+		}, 1);
+	}
+
 	//return;
 
 	/*for (let i = 0; i < 1000; i++) {
