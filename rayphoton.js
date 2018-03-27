@@ -4,11 +4,14 @@ const EPSILON = 1e-6;
 const LITTLE_SPACE = 1e-3;	// let's leave room between things, e.g., don't put them right on the floor. Used automatically in object constructors, not primitives: e.g., use Ball instead of Sphere
 const MAX_TRACE_DIST = 5;
 const MAX_DEPTH = 20;
+
 const SUB_SAMPLE = 1;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
-const SUPER_SAMPLE_BASE = 4; // to get approximate picture at first, but total rendering time is around SSB / (SSB - 1) times longer than if we just started at 1:1 size
-const NUM_PHOTONS_DIFFUSE = 10000;
-const NUM_PHOTONS_CAUSTIC = 10000;
-const LIGHT_PATHS_PER_SOURCE_PER_RAY = 1;	// normally keep this at 1 since it is redundant with subsampling. Shoot this many paths towards light sources for direct lighting; in practice it doesn't offer real benefits, just slows down
+const LIGHT_PATHS_PER_SOURCE_PER_RAY = 1;	// normally keep this around 1 since it is redundant with subsampling. Shoot this many paths towards light sources for direct lighting; in practice it doesn't offer real benefits, just slows down
+
+const SUPER_SAMPLE_BASE = 3; // to get approximate picture at first, but total rendering time is around SSB / (SSB - 1) times longer than if we just started at 1:1 size
+const SUPER_SAMPLE_LEVELS = 6;	// so first draw at scale of SSB ** SSL : 1, then SSB ** (SSL - 1) : 1, ..., 1 : 1
+const NUM_PHOTONS_DIFFUSE = 100;
+const NUM_PHOTONS_CAUSTIC = 100;
 const CAUSTIC_RADIUS = 0.25;
 const DIFFUSE_RADIUS = 0.25;
 const CAUSTIC_AREA = Math.PI * CAUSTIC_RADIUS ** 2;
@@ -23,8 +26,8 @@ const COL_DARK_GREY = { r: 64, g: 64, b: 64, a: 1 };
 const COL_VERY_DARK_GREY = { r: 16, g: 16, b: 16, a: 1 };
 const COL_GREY = { r: 128, g: 128, b: 128, a: 1 };
 const COL_SILVER = { r: 192, g: 192, b: 192, a: 1 };
-const COL_RED = { r: 192, g: 0, b: 0, a: 1 };
-const COL_MAUVE = { r: 64, g: 32, b: 112, a: 1 };
+const COL_FIRE_ENGINE_RED = { r: 200, g: 10, b: 10, a: 1 };
+const COL_AMETHYST = { r: 150, g: 100, b: 200, a: 1 };
 const COL_DEEP_BLUE = { r: 8, g: 8, b: 64, a: 1 };
 const COL_SKY_BLUE = { r: 128, g: 128, b: 224, a: 1 };
 const COL_WARM_GREY = { r: 144, g: 128, b: 128, a: 1 };
@@ -33,7 +36,7 @@ const COL_GRAPEFRUIT_YELLOW = { r: 248, g: 210, b: 112 };
 const COL_LIME_GREEN = { r: 112, g: 160, b: 0, a: 1 };
 const COL_ROBINS_EGG_BLUE = { r: 0, g: 180, b: 180, a: 1 };
 const COL_DEEP_PINK = { r: 255, g: 32, b: 144, a: 1 };
-const COL_COPPER = { r: 174, g: 105, b: 56, a: 1 };
+const COL_RAW_UMBER = { r: 112, g: 68, b: 17, a: 1 };
 const COL_ENGLISH_WALNUT = { r: 68, g: 48, b: 40, a: 1 };
 
 // --------------------------------
@@ -66,6 +69,7 @@ const matRefrIndex = [];
 matRefrIndex[MAT_AIR] = 1.0;
 matRefrIndex[MAT_GLASS] = 1.5;
 matRefrIndex[MAT_WATER] = 1.33;
+matRefrIndex[MAT_COPPER] = 0.64;
 // --------------------------------
 // materials: reflectance for opaque materials
 // --------------------------------
@@ -127,6 +131,10 @@ function colour(col) { return { r: clamp(col.r, 0, 255), g: clamp(col.g, 0, 255)
 
 class Box {		// actually a parallelepiped
 	constructor(shapes, vtxA, edgeAB, edgeAC, edgeAD, baseColour, material) {
+		if (vecDot(edgeAB, vecCross(edgeAC, edgeAD)) < 0) {
+			console.log(`Looks like your box is inside out.`)
+		}
+
 		let adjVtxA = vecPlus(vecPlus(vecPlus(vtxA, vecScalar(LITTLE_SPACE, vecNormalize(edgeAB))),
 																								vecScalar(LITTLE_SPACE, vecNormalize(edgeAC))),
 																								vecScalar(LITTLE_SPACE, vecNormalize(edgeAD)));
@@ -238,8 +246,8 @@ class Spotlight {
 	// to do: * add other kinds of lamps
 	//				* account for colour
 	constructor(shapes, lights, centre, radius, dir, wattage, colour) {
-		//new Bowl(shapes, centre, 1.3 * radius, 1.125 * radius, dir, COL_COPPER, MAT_PLASTER);		// 1.125 is slightly bigger than sqrt(5)/2, to make sure that light (Which is set back by 0.5 * radius) fits inside
-		new Bowl(shapes, centre, 1.3 * radius, 1.125 * radius, dir, COL_COPPER, MAT_COPPER);		// 1.125 is slightly bigger than sqrt(5)/2, to make sure that light (Which is set back by 0.5 * radius) fits inside
+		//new Bowl(shapes, centre, 1.3 * radius, 1.125 * radius, dir, COL_RAW_UMBER, MAT_PLASTER);		// 1.125 is slightly bigger than sqrt(5)/2, to make sure that light (Which is set back by 0.5 * radius) fits inside
+		new Bowl(shapes, centre, 1.3 * radius, 1.125 * radius, dir, COL_RAW_UMBER, MAT_COPPER);		// 1.125 is slightly bigger than sqrt(5)/2, to make sure that light (Which is set back by 0.5 * radius) fits inside
 		let s = shapes.push(new Disc(vecPlus(centre, vecScalar(-0.5 * radius, vecNormalize(dir))), radius, dir));
 		lights.push(s - 1);	// store index of light shape so that we can easily find all lights later
 		shapes[s - 1].isLight = true;
@@ -299,7 +307,7 @@ class Sphere extends Shape {
 		this.type = 'sphere';
 		this.centre = centre;
 		this.radius = radius;
-		this.baseColour = baseColour || COL_RED;
+		this.baseColour = baseColour || COL_FIRE_ENGINE_RED;
 		this.material = material;
 	}
 
@@ -317,7 +325,7 @@ class Hemisphere extends Shape {	// normalDir points towards half that exists; t
 		this.truncateMin = truncateMin;
 		this.truncateMax = truncateMax;
 		this.convex = convex;	// if true, surface points away from centre
-		this.baseColour = baseColour || COL_RED;
+		this.baseColour = baseColour || COL_FIRE_ENGINE_RED;
 		this.material = material;
 	}
 
@@ -613,8 +621,8 @@ class Scene {
 					new Plane([0, 0, 80], [1, 0, -1], COL_VERY_DARK_GREY, MAT_PLASTER),
 				];
 					
-				new Ball(this.shapes, [0.3, 0, 0.4], 0.4, COL_RED, MAT_GLASS);
-				new Ball(this.shapes, [-1.1, 1.2, 0.25], 0.25, COL_MAUVE, MAT_PLASTER);
+				new Ball(this.shapes, [0.3, 0, 0.4], 0.4, COL_FIRE_ENGINE_RED, MAT_GLASS);
+				new Ball(this.shapes, [-1.1, 1.2, 0.25], 0.25, COL_AMETHYST, MAT_PLASTER);
 				new Ball(this.shapes, [0.5, 2.5, 1.25], 1.25, COL_BLACK, MAT_COPPER);
 				new Ball(this.shapes, [-1.5, -2.5, 0.8], 0.8, COL_ORANGE_ORANGE, MAT_PLASTER);
 
@@ -666,18 +674,18 @@ class Scene {
 					return [COL_WHITE, COL_BLACK][index];
 				}
 
-				new Box(this.shapes, [-5, 8, 0], [1.5, -0.3, 0], [0.3, 1.5, 0], [0, 0, 0.5], COL_COPPER, MAT_COPPER);
+				new Box(this.shapes, [-5, 8, 0], [1.5, -0.3, 0], [0.3, 1.5, 0], [0, 0, 0.5], COL_RAW_UMBER, MAT_COPPER);
 				new Box(this.shapes, [-2, 8, 0], [1.5, -0.3, 0], [0.3, 1.5, 0], [0, 0, 0.5], COL_WHITE, MAT_GLASS);
-				new Box(this.shapes, [1, 8, 0], [1.5, -0.3, 0], [0.3, 1.5, 0], [0, 0, 0.5], COL_MAUVE, MAT_PLASTER);
+				new Box(this.shapes, [1, 8, 0], [1.5, -0.3, 0], [0.3, 1.5, 0], [0, 0, 0.5], COL_AMETHYST, MAT_PLASTER);
 
 				new Ball(this.shapes, [-5, 10, 1], 1, COL_WHITE, MAT_GLASS);
-				new Ball(this.shapes, [-2, 10, 1], 1, COL_MAUVE, MAT_PLASTER);
-				new Ball(this.shapes, [1, 10, 1], 1, COL_COPPER, MAT_COPPER);
+				new Ball(this.shapes, [-2, 10, 1], 1, COL_AMETHYST, MAT_PLASTER);
+				new Ball(this.shapes, [1, 10, 1], 1, COL_RAW_UMBER, MAT_COPPER);
 				
 				new Ball(this.shapes, [-1, 14, 2], 2, COL_WHITE, MAT_MIRROR);
 
 				new Spotlight(this.shapes, this.lights, [0, 0, 10], 0.5, [0, 0, -1], 40);
-				new Spotlight(this.shapes, this.lights, [-6, 10, 4.5], 0.5, [1, 0, -1], 10), COL_RED;
+				new Spotlight(this.shapes, this.lights, [-6, 10, 4.5], 0.5, [1, 0, -1], 10), COL_FIRE_ENGINE_RED;
 				new Spotlight(this.shapes, this.lights, [-3, 10, 5.5], 0.5, [0, 0, -1], 10, COL_LIME_GREEN);
 				new Spotlight(this.shapes, this.lights, [0, 10, 4.5], 0.5, [-1, 0, -1], 10, COL_DEEP_BLUE);
 				this.camera = new Camera([-2.3, -6, 5], [0, 1, -0.2], [0, 0, 1], this.canvasWidth, this.canvasHeight);
@@ -733,7 +741,7 @@ class Scene {
 					new Plane([16, 0, 0], [-1, 0, 0], COL_DARK_GREY, 0.02),
 					new Plane([-16, 0, 0], [1, 0, 0], COL_DARK_GREY, 0.02),
 
-/*				new Sphere([4, 2, 3], 3, COL_COPPER, 0.2),
+/*				new Sphere([4, 2, 3], 3, COL_RAW_UMBER, 0.2),
 
 					new Sphere([-2.5, -1.2, 0.6], 0.6, COL_SILVER, 0.98, MAT_GLASS),
 					new Sphere([-2.5, -1.2, 0.6], 0.05, COL_SILVER, 0.98, MAT_AIR),
@@ -746,15 +754,15 @@ class Scene {
 				];
 				/*new Bowl(this.shapes, [0, -1, 1], 1, 0.9, [0, 0, 1], COL_WHITE, 0.97, MAT_GLASS);*/
 				new Halfball(this.shapes, [0, -1, 1], 0.9, [0, 0, 1], 0.3, undefined, COL_WHITE, 0.97, MAT_WATER);/*
-				new Box(this.shapes, [-0.1, -1, 0.15], [0.1, 0, 0], [0, 0.1, 0], [0.5, 0, 1.8], COL_COPPER, 0.1);
+				new Box(this.shapes, [-0.1, -1, 0.15], [0.1, 0, 0], [0, 0.1, 0], [0.5, 0, 1.8], COL_RAW_UMBER, 0.1);
 				new Cuboctahedron(this.shapes, [-0.7, 1, 0], [1.2, 0, 0], [0, 1.2, 0], [0, 0, 1.2], COL_DEEP_BLUE, COL_DEEP_PINK, 0.3)*/
 				new Bowl(this.shapes, [-2.3, 1, 1], 1, 0.8, [0, 0, 1], COL_DEEP_BLUE, 0.3);
 				new Ball(this.shapes, [-2.3, 1, 0.7], 0.5, COL_GRAPEFRUIT_YELLOW, 0.3);
 				new Ball(this.shapes, [0.35, -0.8, 2.8], 0.3, COL_ORANGE_ORANGE, 0.3);
-				new Ball(this.shapes, [-0.4, 3.5, 2], 2, COL_COPPER, 0.6);
+				new Ball(this.shapes, [-0.4, 3.5, 2], 2, COL_RAW_UMBER, 0.6);
 				new Cuboctahedron(this.shapes, [-0.7, -2, 0], [2.5, 0, 0], [0, 2.5, 0], [0, 0, 2.5], COL_DEEP_PINK, COL_DARK_GREY, 0.3);
 
-				//new Box(this.shapes, [-2, 0.5, 0], [1, 0, 0], [0, 4.5, 0], [0, 0, 1.3], COL_MAUVE, 0.1, MAT_OPAQUE);
+				//new Box(this.shapes, [-2, 0.5, 0], [1, 0, 0], [0, 4.5, 0], [0, 0, 1.3], COL_AMETHYST, 0.1, MAT_OPAQUE);
 				//new Prism(this.shapes, [0, 2, 0], [1, 0, 0], [0, 4, 0], [0, 0, 0.5], COL_LIME_GREEN, 0.8, MAT_GLASS);
 
 				this.shapes[0].colour = function(p) {
@@ -778,18 +786,16 @@ class Scene {
 					return [COL_WHITE, COL_BLACK][index];
 				}
 
-				//new Ball(this.shapes, [0, 0, 3], 2, COL_WHITE, MAT_GLASS);
-				//new Ball(this.shapes, [0, 0, 2], 2, COL_COPPER, MAT_COPPER);
-				new Ball(this.shapes, [0, 0, 2], 2, COL_COPPER, MAT_GLASS);
-				new Ball(this.shapes, [3.2, 0.4, 1], 1, COL_LIME_GREEN, MAT_GLASS);//  MAT_PLASTER);
+				new Ball(this.shapes, [0, 0, 2], 2, COL_RAW_UMBER, MAT_COPPER);
+				new Ball(this.shapes, [3.2, 0.4, 1], 1, COL_LIME_GREEN, MAT_PLASTER);
 				
 				new Prism(this.shapes, [-3, -2.5, 0], [9, -0.6, 0], [9, 0.2, 0], [0, 0, 2.2], COL_WHITE, MAT_GLASS);
 				
 				new Spotlight(this.shapes, this.lights, [-1, -3, 8.5], 1, [0, 0, -1], 40);
 				new Spotlight(this.shapes, this.lights, [-6, 0, 6.5], 1, [1, 0, -1], 40);
 
-				new Box(this.shapes, [2, 3, 0], [2, -1, 0], [0.1, 0.2, 0], [0, 0, 5], COL_WHITE, MAT_GLASS);// MAT_MIRROR);
-				new Box(this.shapes, [4.5, 1.5, 0], [1, -2, 0], [0.2, 0.1, 0], [0, 0, 5], COL_WHITE, MAT_GLASS);//  MAT_MIRROR);
+				new Box(this.shapes, [2, 3, 0], [2, -1, 0], [0.1, 0.2, 0], [0, 0, 5], COL_WHITE, MAT_MIRROR);
+				new Box(this.shapes, [4.5, 1.5, 0], [1, -2, 0], [0.2, 0.1, 0], [0, 0, 5], COL_WHITE, MAT_MIRROR);
 				
 				this.camera = new Camera([-4.2, -17.9, 8.8], [0.4, 1, -0.4], [0, 0, 1], this.canvasWidth, this.canvasHeight);
 				break;
@@ -799,7 +805,7 @@ class Scene {
 					new Plane([0, 4, 0], [0, -1, 0], COL_GRAPEFRUIT_YELLOW, MAT_PLASTER),
 					new Plane([0, -14, 0], [0, 1, 0], COL_GREY, MAT_PLASTER),
 					new Plane([4, 0, 0], [-1, 0, 0], COL_SKY_BLUE, MAT_PLASTER),
-					new Plane([-4, 0, 0], [1, 0, 0], COL_RED, MAT_PLASTER),
+					new Plane([-4, 0, 0], [1, 0, 0], COL_FIRE_ENGINE_RED, MAT_PLASTER),
 					new Plane([0, 0, 8], [0, 0, -1], COL_DARK_GREY, MAT_PLASTER),
 				]
 				/*this.shapes[0].colour = function(p) {
@@ -867,7 +873,7 @@ class Scene {
 					//let colB = // Math.floor(256 * Math.random());
 					//let colour = { r: colR, g: colG, b: colB, a: 1 };
 					let material = MAT_PLASTER;// (Math.random() < 0.95) ? ((Math.random < 0.90) ? MAT_PLASTER : MAT_COPPER) : MAT_MIRROR;					
-					new Box(this.shapes, [centreX - (cosTh + sinTh) / 2, centreY - (cosTh - sinTh) / 2, base], [cosTh, -sinTh, 0], [sinTh, cosTh, 0], [0, 0, height], colour, material);
+					new Box(this.shapes, [centreX - (cosTh + sinTh) / 2, centreY - (-sinTh + cosTh) / 2, base], [cosTh, -sinTh, 0], [sinTh, cosTh, 0], [0, 0, height], colour, material);
 				}
 				new Ball(this.shapes, [tallestX, tallestY, tallestZ + 0.5], 0.5, COL_WHITE, MAT_MIRROR);
 				new Ball(this.shapes, [shortestX, shortestY, shortestZ + 0.5], 0.5, COL_WHITE, MAT_GLASS);
@@ -883,7 +889,7 @@ class Scene {
 					new Plane([0, 4, 0], [0, -1, 0], COL_GRAPEFRUIT_YELLOW, MAT_PLASTER),
 					new Plane([0, -14, 0], [0, 1, 0], COL_GREY, MAT_PLASTER),
 					new Plane([4, 0, 0], [-1, 0, 0], COL_SKY_BLUE, MAT_PLASTER),
-					new Plane([-4, 0, 0], [1, 0, 0], COL_RED, MAT_PLASTER),
+					new Plane([-4, 0, 0], [1, 0, 0], COL_FIRE_ENGINE_RED, MAT_PLASTER),
 					new Plane([0, 0, 8], [0, 0, -1], COL_DARK_GREY, MAT_PLASTER),
 				]
 				for (let b = 0; b < 0; b++) {
@@ -924,12 +930,90 @@ class Scene {
 				
 				new Ball(this.shapes, [-2.5, 2.5, 1], 1, COL_WHITE, MAT_GLASS);
 				new Ball(this.shapes, [0, 2.5, 1], 1, COL_ROBINS_EGG_BLUE, MAT_PLASTER);
-				new Ball(this.shapes, [2.5, 2.5, 1], 1, COL_COPPER, MAT_COPPER);
+				new Ball(this.shapes, [2.5, 2.5, 1], 1, COL_RAW_UMBER, MAT_COPPER);
 				new Spotlight(this.shapes, this.lights, [-1.5, 0.5, 6.5], 0.25, [0.1, 0.3, -1], 40);
 
 				new Box(this.shapes, [-3.75, -3.5, 0], [7.5, 4, 0], [-0.2, 0.375, 0], [0, 0, 4], COL_WHITE, MAT_GLASS);
 
 				this.camera = new Camera([0, -13.6, 4.5], [0, 1, -0.1], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+				break;
+			case 7:
+				this.shapes = [
+					new Plane([0, 0, 0], [0, 0, 1], COL_SILVER, MAT_LINOLEUM),
+					new Plane([0, 4, 0], [0, -1, 0], COL_GRAPEFRUIT_YELLOW, MAT_PLASTER),
+					new Plane([0, -14, 0], [0, 1, 0], COL_GREY, MAT_PLASTER),
+					new Plane([4, 0, 0], [-1, 0, 0], COL_SKY_BLUE, MAT_PLASTER),
+					new Plane([-4, 0, 0], [1, 0, 0], COL_FIRE_ENGINE_RED, MAT_PLASTER),
+					new Plane([0, 0, 8], [0, 0, -1], COL_DARK_GREY, MAT_PLASTER),
+				]
+
+				new Box(this.shapes, [-3.5, 1.5, 1.5], [7, 0, 0], [0, 2, 0], [0, 0, 3], COL_WHITE, MAT_GLASS);
+				new Box(this.shapes, [-3.4, 1.6, 1.6], [6.8, 0, 0], [0, 1.8, 0], [0, 0, 2.8], COL_WHITE, MAT_AIR);
+				new Box(this.shapes, [-3, 2.25, 0], [0.5, 0, 0], [0, 0.5, 0], [0, 0, 1.5], COL_RAW_UMBER, MAT_PLASTER);
+				new Box(this.shapes, [3, 2.25, 0], [0.5, 0, 0], [0, 0.5, 0], [0, 0, 1.5], COL_RAW_UMBER, MAT_PLASTER);
+				
+				new Ball(this.shapes, [-2, 2.5, 2.3], 0.7, COL_AMETHYST, MAT_COPPER);
+				new Ball(this.shapes, [0, 2.5, 2.3], 0.7, COL_ROBINS_EGG_BLUE, MAT_COPPER);
+				new Ball(this.shapes, [2, 2.5, 2.3], 0.7, COL_LIME_GREEN, MAT_COPPER);
+				
+				new Spotlight(this.shapes, this.lights, [-1.5, 0.5, 6.5], 0.25, [0.1, 0.3, -1], 40);
+
+				this.camera = new Camera([-2, -13.6, 3], [0.2, 1, 0], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+				break;
+			case 8:
+				this.shapes = [
+					new Plane([0, 0, 0], [0, 0, 1], COL_SILVER, MAT_LINOLEUM),
+					new Plane([0, 4, 0], [0, -1, 0], COL_GRAPEFRUIT_YELLOW, MAT_PLASTER),
+					new Plane([0, -14, 0], [0, 1, 0], COL_GREY, MAT_PLASTER),
+					new Plane([4, 0, 0], [-1, 0, 0], COL_SKY_BLUE, MAT_PLASTER),
+					new Plane([-4, 0, 0], [1, 0, 0], COL_FIRE_ENGINE_RED, MAT_PLASTER),
+					new Plane([0, 0, 8], [0, 0, -1], COL_DARK_GREY, MAT_PLASTER),
+				]
+
+				for (let b = -2; b <= 2; b++) {
+					let centreX = 1.5 * b;
+					let centreY = 3;
+					let centreZ = 0.6
+					let radius = 0.6
+
+					let colour = {};
+					let colHue = 72 * (b + 2); 
+					let c = Math.floor(256 * (1 - Math.abs((colHue / 60) % 2 - 1)));					
+					switch (Math.floor(colHue / 60)) {
+						case 0:
+							colour = { r: 255, g: c, b: 0, a: 1 };
+							break;
+						case 1:
+							colour = { r: c, g: 255, b: 0, a: 1 };
+							break;
+						case 2:
+							colour = { r: 0, g: 255, b: c, a: 1 };
+							break;
+						case 3:
+							colour = { r: 0, g: c, b: 255, a: 1 };
+							break;
+						case 4:
+							colour = { r: c, g: 0, b: 255, a: 1 };
+							break;
+						case 5:
+							colour = { r: 255, g: 0, b: c, a: 1 };
+							break;
+						default:
+							throw new Error(`impossible HSV?`);
+							break;
+					}
+					let material = MAT_PLASTER;
+					new Ball(this.shapes, [centreX, centreY, centreZ], radius, colour, material);
+
+					let cosTheta = Math.cos((22.5 * (b + 2)) * Math.PI / 180);
+					let sinTheta = Math.sin((22.5 * (b + 2)) * Math.PI / 180);
+
+					new Box(this.shapes, [centreX + (-1.4 * cosTheta + 0.04 * sinTheta) / 2, centreY - 2 + (-1.4 * sinTheta - 0.04 * cosTheta) / 2, 0], [1.4 * cosTheta, 1.4 * sinTheta, 0], [-0.04 * sinTheta, 0.04 * cosTheta, 0], [0, 0, 4], COL_WHITE, MAT_GLASS);
+				}
+				
+				new Spotlight(this.shapes, this.lights, [-1.5, 0.5, 6.5], 0.25, [0.1, 0.3, -1], 40);
+
+				this.camera = new Camera([-2, -13.6, 3], [0.2, 1, 0], [0, 0, 1], this.canvasWidth, this.canvasHeight);
 				break;
 			default:
 				break;
@@ -1109,7 +1193,7 @@ class Scene {
 			let normal = minShape.normal(intersection);
 			let cosTheta1	= -vecDot(photon.dir, normal);
 			
-			if (minShape.transparent) {
+			if (minShape.transparent && depth < MAX_DEPTH) {
 				let eta1 = matRefrIndex[materialStack[materialStack.length - 1]];		// current medium
 				let eta2 = (vecDot(photon.dir, normal) < 0) ? minShape.refrIndex : matRefrIndex[materialStack[materialStack.length - 2]];	// enter or exit medium
 				if (eta2 == undefined) {
@@ -1121,16 +1205,30 @@ class Scene {
 					let reflectDir = vecPlus(photon.dir, vecScalar(2 * cosTheta1, normal));
 					let isCaustic = (photon.isCaustic == undefined) ? true : photon.isCaustic;					
 					this.emitPhoton(new Photon(intersection, reflectDir, photon.power, photon.colour, isCaustic), depth + 1, trackOnlyCaustic, materialStack);
-				} else {	// refract
-					let plusMinus = (cosTheta1 < 0) ? -1 : 1;		// used in refractDir to make sure angle is right depending on whether we're entering or exiting (because normal points out of surface)
-					let refractDir = vecPlus(vecScalar(etaRatio, photon.dir), vecScalar(etaRatio * cosTheta1 - plusMinus * Math.sqrt(cosTheta2Sq), normal));
-					if (cosTheta1 < 0) {	// exiting medium
-						materialStack.pop();
-					} else {		// entering medium
-						materialStack = [...materialStack, minShape._material];
+				} else {	// reflect or refract (use Fresnel equations)
+					let cosTheta2 = Math.sqrt(cosTheta2Sq);
+					let rS = ((eta1 * cosTheta1 - eta2 * cosTheta2) / (eta1 * cosTheta1 + eta2 * cosTheta2)) ** 2;	// s-polarized reflectance
+					let rP = ((eta1 * cosTheta2 - eta2 * cosTheta1) / (eta1 * cosTheta2 + eta2 * cosTheta1)) ** 2;  // p-    "           "
+					if (cosTheta1 < 0) {
+						rS = 1 / rS;	// this has same effect as changing sign of cosTheta1 in formula above
+						rP = 1 / rP;
 					}
-					let isCaustic = (photon.isCaustic == undefined) ? true : photon.isCaustic;
-					this.emitPhoton(new Photon(intersection, refractDir, photon.power, photon.colour, isCaustic), depth + 1, trackOnlyCaustic, materialStack);
+
+					if (Math.random() < 0.5 * (rS + rP)) { // reflect
+						let reflectDir = vecPlus(photon.dir, vecScalar(2 * cosTheta1, normal));
+						let isCaustic = (photon.isCaustic == undefined) ? true : photon.isCaustic;					
+						this.emitPhoton(new Photon(intersection, reflectDir, photon.power, photon.colour, isCaustic), depth + 1, trackOnlyCaustic, materialStack);	
+					}	else {	// refract
+						let plusMinus = (cosTheta1 < 0) ? -1 : 1;		// used in refractDir to make sure angle is right depending on whether we're entering or exiting (because normal points out of surface)
+						let refractDir = vecPlus(vecScalar(etaRatio, photon.dir), vecScalar(etaRatio * cosTheta1 - plusMinus * cosTheta2, normal));
+						if (cosTheta1 < 0) {	// exiting medium
+							materialStack.pop();
+						} else {		// entering medium
+							materialStack = [...materialStack, minShape._material];
+						}
+						let isCaustic = (photon.isCaustic == undefined) ? true : photon.isCaustic;
+						this.emitPhoton(new Photon(intersection, refractDir, photon.power, photon.colour, isCaustic), depth + 1, trackOnlyCaustic, materialStack);
+					}
 				}
 			} else {	// opaque: reflect or absorb
 				if (Math.random() < minShape.reflectance) {	// reflect
@@ -1201,8 +1299,14 @@ class Scene {
 		let totalCol = { r: 0, g: 0, b: 0, a: 0 }
 		for (let subSampleY = 0; subSampleY < SUB_SAMPLE; subSampleY++) {
 			for (let subSampleX = 0; subSampleX < SUB_SAMPLE; subSampleX++) {
-				u = ((canvasX + (subSampleX + Math.random()) / SUB_SAMPLE) * 2 / this.canvasWidth) - 1;
-				v = -(((canvasY + (subSampleY + Math.random()) / SUB_SAMPLE) * 2 / this.canvasHeight) - 1);
+				let superSampleX = canvasX;
+				let superSampleY = canvasY;
+				if (superSampleScale > 0) {	// pick some random point to represent large area
+					superSampleX += SUPER_SAMPLE_BASE ** superSampleScale * Math.random();
+					superSampleY += SUPER_SAMPLE_BASE ** superSampleScale * Math.random();
+				}
+				u = ((superSampleX + (subSampleX + Math.random()) / SUB_SAMPLE) * 2 / this.canvasWidth) - 1;
+				v = -(((superSampleY + (subSampleY + Math.random()) / SUB_SAMPLE) * 2 / this.canvasHeight) - 1);
 				w = -1;
 
 				u *= this.camera.fovScaleWidth;
@@ -1294,18 +1398,31 @@ class Scene {
 					if (cosTheta2Sq < 0) {	// total internal reflection
 						let reflectDir = vecPlus(ray.dir, vecScalar(2 * cosTheta1, normal));
 						transmittedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth + 1, importance, materialStack);
-					} else {
-						let plusMinus = (cosTheta1 < 0) ? -1 : 1;		// used in refractDir to make sure angle is right depending on whether we're entering or exiting (because normal points out of surface)
-						let refractDir = vecPlus(vecScalar(etaRatio, ray.dir), vecScalar(etaRatio * cosTheta1 - plusMinus * Math.sqrt(cosTheta2Sq), normal));
-						if (cosTheta1 < 0) {	// exiting medium
-              if (debug) { console.log(`(exit ${materialStack[materialStack.length - 1]})`); }
-							materialStack.pop();
-						} else {		// entering medium
-              if (debug) { console.log(`(enter ${minShape._material})`); }
-							materialStack = [...materialStack, minShape._material];
+					} else {  // reflect or refract (use Fresnel equations)
+						let cosTheta2 = Math.sqrt(cosTheta2Sq);
+						let rS = ((eta1 * cosTheta1 - eta2 * cosTheta2) / (eta1 * cosTheta1 + eta2 * cosTheta2)) ** 2;	// s-polarized reflectance
+						let rP = ((eta1 * cosTheta2 - eta2 * cosTheta1) / (eta1 * cosTheta2 + eta2 * cosTheta1)) ** 2;  // p-    "           "
+						if (cosTheta1 < 0) {
+							rS = 1 / rS;	// this has same effect as changing sign of cosTheta1 in formula above
+							rP = 1 / rP;
 						}
-						let refractedColour = this.traceRay(new Ray(intersection, refractDir), maxDist - minIntersectionDist, depth + 1, importance, materialStack);
-						transmittedColour = refractedColour;
+	
+						if (Math.random() < 0.5 * (rS + rP)) { // reflect
+							let reflectDir = vecPlus(ray.dir, vecScalar(2 * cosTheta1, normal));
+							transmittedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth + 1, importance, materialStack);
+						} else { // refract
+							let plusMinus = (cosTheta1 < 0) ? -1 : 1;		// used in refractDir to make sure angle is right depending on whether we're entering or exiting (because normal points out of surface)
+							let refractDir = vecPlus(vecScalar(etaRatio, ray.dir), vecScalar(etaRatio * cosTheta1 - plusMinus * cosTheta2, normal));
+							if (cosTheta1 < 0) {	// exiting medium
+								if (debug) { console.log(`(exit ${materialStack[materialStack.length - 1]})`); }
+								materialStack.pop();
+							} else {		// entering medium
+								if (debug) { console.log(`(enter ${minShape._material})`); }
+								materialStack = [...materialStack, minShape._material];
+							}
+							let refractedColour = this.traceRay(new Ray(intersection, refractDir), maxDist - minIntersectionDist, depth + 1, importance, materialStack);
+							transmittedColour = refractedColour;
+						}
 					}
           if (debug) { console.log(`transmitting ${JSON.stringify(transmittedColour)}`); }
 					return transmittedColour;
@@ -1391,8 +1508,8 @@ class Scene {
 						for (let component of ["r", "g", "b"]) {
 							rayCol[component] = (1 - minShape.reflectance) * directColour[component];
 							rayCol[component] += transmittedColour[component];
-              rayCol[component] += photonDiffuseColour[component];
-							rayCol[component] += photonCausticColour[component];
+              //rayCol[component] += photonDiffuseColour[component];
+							//rayCol[component] += photonCausticColour[component];
 						}
 						return rayCol;
 					}
@@ -1547,7 +1664,7 @@ function main() {
 	ctx.width = canvas.width;
   
  	let scene = new Scene(ctx);
-  scene.loadPreset(6);
+  scene.loadPreset(4);
   scene.drawPhotons();
   
   let drawing = false;
@@ -1618,7 +1735,7 @@ function main() {
         clearInterval(trace);        
       } else {
 				drawing = true;
-				superSampleTiles(3);	// draw very approximate picture, then more and more accurate
+				superSampleTiles();	// draw very approximate picture, then more and more accurate
       }
 		}
 	}, false);
@@ -1638,6 +1755,7 @@ function main() {
 	}, false);
 
 	canvas.addEventListener('click', function(evt) {
+		return;
 		debug = true;
 		let mousePos = getMousePos(canvas, evt);
 
@@ -1670,37 +1788,30 @@ function main() {
 					y = scene.shapes[s].centre[1];
 					z = scene.shapes[s].centre[2] + scene.shapes[s].radius * Math.sin(Math.PI / 180 * theta);;
 					proj = scene.projectToCanvas([x, y, z));
-					putPixel(ctx, COL_RED, proj.x, proj.y);
+					putPixel(ctx, COL_FIRE_ENGINE_RED, proj.x, proj.y);
 				}
 			}
 		}*/
 	}, false);
 
-	function superSampleTiles(scale) {        
+	function superSampleTiles() {
 		let tiles = [];
-		let tileSize = Math.floor(SUPER_SAMPLE_BASE ** scale * 20 / SUB_SAMPLE);
-						
+
+		let tileSize = Math.floor(20 / SUB_SAMPLE);
+
 		// count photons (projected onto canvas) per tile to guess which tiles are more interesting; we'll draw high photon tiles first
-		// photons also contribute to neighbouring cells, so a cell near a high-photon cell is also interesting (this will help give context, e.g., shadows beside bright objects)
 		let tilePhotons = [];
 		let tilesX = Math.floor(canvas.width / tileSize) + 1;   //add 1 in case tileSize doesn't divide canvas dimensions
 		let tilesY = Math.floor(canvas.height / tileSize) + 1;  // "
+
 		for (let photon of scene.photonListDiffuse) {
 			let proj = scene.projectToCanvas(photon.origin);
 			if (proj != undefined) {
-				let regionX = Math.floor(proj.x / tileSize);
-				let regionY = Math.floor(proj.y / tileSize);
-				for (let j = -2; j <= 2; j++) {
-					for (let i = -2; i <= 2; i++) {
-						if (i * i + j * j < 8) {
-							let x = regionX + i;
-							let y = regionY + j;
-							if (regionX >= 0 && regionX < tilesX && regionY >= 0 && regionY < tilesY) {              
-								if (tilePhotons[y * tilesX + x] == undefined) { tilePhotons[y * tilesX + x] = 0; }
-								tilePhotons[y * tilesX + x]++;
-							}
-						}
-					}
+				let x = Math.floor(proj.x / tileSize);
+				let y = Math.floor(proj.y / tileSize);
+				if (x >= 0 && x < tilesX && y >= 0 && y < tilesY) {              
+					if (tilePhotons[y * tilesX + x] == undefined) { tilePhotons[y * tilesX + x] = 0; }
+					tilePhotons[y * tilesX + x]++;
 				}
 			}
 		}
@@ -1715,27 +1826,44 @@ function main() {
 				}
 			}        
 		}
-		
-		// create tiles and sort them        
-		for (let y = 0; y < tilesY; y++) {
-			for (let x = 0; x < tilesX; x++) {
-				tiles.push({ region: [x * tileSize, y * tileSize], photons: tilePhotons[y * tilesX + x] || 0 });
+
+		// create tiles and sort them; also create several levels of supertiles
+		for (let scale = 0; scale <= SUPER_SAMPLE_LEVELS; scale++) {
+			for (let y = 0; y < tilesY; y += SUPER_SAMPLE_BASE ** scale) {
+				for (let x = 0; x < tilesX; x += SUPER_SAMPLE_BASE ** scale) {
+					if (tilePhotons[y * tilesX + x] == undefined) { tilePhotons[y * tilesX + x] = 0; }
+					tiles.push({ region: [x * tileSize, y * tileSize], photons: tilePhotons[y * tilesX + x] || 0, scale: scale });
+				}
+			}
+
+			// now that we've pushed those tiles, aggregate tile information into larger tiles
+			for (let y = 0; y < tilesY; y += SUPER_SAMPLE_BASE ** (scale + 1)) {
+				for (let x = 0; x < tilesX; x += SUPER_SAMPLE_BASE ** (scale + 1)) {
+					for (let baseJ = 0; baseJ < SUPER_SAMPLE_BASE; baseJ++) {
+						for (let baseI = 0; baseI < SUPER_SAMPLE_BASE; baseI++) {
+							let i = baseI * SUPER_SAMPLE_BASE ** scale;
+							let j = baseJ * SUPER_SAMPLE_BASE ** scale;
+							if (!(i == 0 && j == 0) && (x + i < tilesX) && (y + j < tilesY)) {	// don't add top left tile to itself; don't go out of bounds
+								if (tilePhotons[y * tilesX + x] == undefined) { tilePhotons[y * tilesX + x] = 0; }
+								tilePhotons[y * tilesX + x] += tilePhotons[(y + j) * tilesX + (x + i)];
+							}
+						}
+					}
+				}
 			}
 		}
+
 		shuffle(tiles);	// shuffle first so that when it gets to all the (e.g.) 1-photon tiles, it doesn't just go row by row
-		tiles.sort( (a, b) => a.photons - b.photons );
+		tiles.sort( (a, b) => (a.photons == b.photons) ? a.scale - b.scale : a.photons - b.photons);	// sort by # photons, but if same number, make sure to draw bigger tiles first
 
 		trace = setInterval(function() {
 			if (tiles.length && drawing) {
 				let tile = tiles.pop();
-				scene.traceTile(tile.region, tileSize, scale);
+				scene.traceTile(tile.region, tileSize * SUPER_SAMPLE_BASE ** tile.scale, tile.scale);
 			} else {
 				clearInterval(trace);
-				if (scale > 0) {
-					superSampleTiles(scale - 1);
-				} else {
-					drawing = false;
-				}
+				console.log(`Done!`);
+				drawing = false;
 			}
 		}, 1);
 	}
