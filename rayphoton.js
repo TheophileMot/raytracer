@@ -1,19 +1,20 @@
 let debug = false;
+let warnings = false;
 
 const EPSILON = 1e-6;
 const LITTLE_SPACE = 1e-3;	// let's leave room between things, e.g., don't put them right on the floor. Used automatically in object constructors, not primitives: e.g., use Ball instead of Sphere
 const MAX_TRACE_DIST = 5;
 const MAX_DEPTH = 20;
 
-const SUB_SAMPLE = 1;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
-const LIGHT_PATHS_PER_SOURCE_PER_RAY = 1;	// normally keep this around 1 since it is redundant with subsampling. Shoot this many paths towards light sources for direct lighting; in practice it doesn't offer real benefits, just slows down
+const SUB_SAMPLE = 4;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
+const LIGHT_PATHS_PER_SOURCE_PER_RAY = 2;	// normally keep this around 1 since it is redundant with subsampling. Shoot this many paths towards light sources for direct lighting; in practice it doesn't offer real benefits, just slows down
 
-const SUPER_SAMPLE_BASE = 3; // to get approximate picture at first, but total rendering time is around SSB / (SSB - 1) times longer than if we just started at 1:1 size
-const SUPER_SAMPLE_LEVELS = 6;	// so first draw at scale of SSB ** SSL : 1, then SSB ** (SSL - 1) : 1, ..., 1 : 1
-const NUM_PHOTONS_DIFFUSE = 100;
-const NUM_PHOTONS_CAUSTIC = 100;
-const CAUSTIC_RADIUS = 0.25;
-const DIFFUSE_RADIUS = 0.25;
+const SUPER_SAMPLE_BASE = 7; // to get approximate picture at first, but total rendering time is around SSB / (SSB - 1) times longer than if we just started at 1:1 size
+const SUPER_SAMPLE_LEVELS = 5;	// so first draw at scale of SSB ** SSL : 1, then SSB ** (SSL - 1) : 1, ..., 1 : 1
+const NUM_PHOTONS_DIFFUSE = 200;
+const NUM_PHOTONS_CAUSTIC = 500;
+const CAUSTIC_RADIUS = 0.15;
+const DIFFUSE_RADIUS = 0.40;
 const CAUSTIC_AREA = Math.PI * CAUSTIC_RADIUS ** 2;
 const DIFFUSE_AREA = Math.PI * DIFFUSE_RADIUS ** 2;
 
@@ -33,11 +34,14 @@ const COL_SKY_BLUE = { r: 128, g: 128, b: 224, a: 1 };
 const COL_WARM_GREY = { r: 144, g: 128, b: 128, a: 1 };
 const COL_ORANGE_ORANGE = { r: 224, g: 124, b: 32 };
 const COL_GRAPEFRUIT_YELLOW = { r: 248, g: 210, b: 112 };
-const COL_LIME_GREEN = { r: 112, g: 160, b: 0, a: 1 };
-const COL_ROBINS_EGG_BLUE = { r: 0, g: 180, b: 180, a: 1 };
+const COL_SCHOOL_BUS_YELLOW = { r: 255, g: 216, b: 1 };
+const COL_LIME_GREEN = { r: 112, g: 160, b: 1, a: 1 };
+const COL_ROBINS_EGG_BLUE = { r: 1, g: 180, b: 180, a: 1 };
 const COL_DEEP_PINK = { r: 255, g: 32, b: 144, a: 1 };
 const COL_RAW_UMBER = { r: 112, g: 68, b: 17, a: 1 };
 const COL_ENGLISH_WALNUT = { r: 68, g: 48, b: 40, a: 1 };
+const COL_VANILLA = { r: 243, g: 229, b: 171, a: 1 };
+const COL_CHOCOLATE = { r: 32, g: 16, b: 8, a: 1 };
 
 // --------------------------------
 //            materials
@@ -77,7 +81,7 @@ const matReflectance = [];
 matReflectance[MAT_MIRROR] = 1;
 matReflectance[MAT_COPPER] = 0.7;
 matReflectance[MAT_LINOLEUM] = 0.6;
-matReflectance[MAT_PLASTER] = 0.3;
+matReflectance[MAT_PLASTER] = 0.2;
 matReflectance[MAT_SPECTRALON] = 1;
 // --------------------------------
 // materials: specular (as fraction of reflectance; remainder is Lambertian, i.e., diffuse)
@@ -92,7 +96,7 @@ matSpecular[MAT_PLASTER] = 0;
 matSpecular[MAT_SPECTRALON] = 0;
 
 function vecPlus(v, w) { return [v[0] + w[0], v[1] + w[1], v[2] + w[2]]; }
-function vecMinus(v, w) { return[v[0] - w[0], v[1] - w[1], v[2] - w[2]]; }
+function vecMinus(v, w) { return [v[0] - w[0], v[1] - w[1], v[2] - w[2]]; }
 function vecScalar(k, v) { return [k * v[0], k * v[1], k * v[2]]; }
 function vecDot(v, w) { return v[0] * w[0] + v[1] * w[1] + v[2] * w[2]; }
 function vecCross(v, w) { return [v[1] * w[2] - v[2] * w[1], v[2] * w[0] - v[0] * w[2], v[0] * w[1] - v[1] * w[0]]; }
@@ -130,17 +134,19 @@ function clamp(x, min, max) { return (x < min) ? min : ((x > max) ? max : x); }
 function colour(col) { return { r: clamp(col.r, 0, 255), g: clamp(col.g, 0, 255), b: clamp(col.b, 0, 255), a: clamp(col.a, 0, 1) } };
 
 class Box {		// actually a parallelepiped
-	constructor(shapes, vtxA, edgeAB, edgeAC, edgeAD, baseColour, material) {
+	constructor(shapes, vtxA, edgeAB, edgeAC, edgeAD, baseColour, material, nudge) {
 		if (vecDot(edgeAB, vecCross(edgeAC, edgeAD)) < 0) {
 			console.log(`Looks like your box is inside out.`)
 		}
 
-		let adjVtxA = vecPlus(vecPlus(vecPlus(vtxA, vecScalar(LITTLE_SPACE, vecNormalize(edgeAB))),
-																								vecScalar(LITTLE_SPACE, vecNormalize(edgeAC))),
-																								vecScalar(LITTLE_SPACE, vecNormalize(edgeAD)));
-		let adjEdgeAB = vecMinus(edgeAB, vecScalar(2 * LITTLE_SPACE, vecNormalize(edgeAB)));
-		let adjEdgeAC = vecMinus(edgeAC, vecScalar(2 * LITTLE_SPACE, vecNormalize(edgeAC)));
-		let adjEdgeAD = vecMinus(edgeAD, vecScalar(2 * LITTLE_SPACE, vecNormalize(edgeAD)));
+		nudge = (nudge == undefined || nudge) ? 1 : 0;
+
+		let adjVtxA = vecPlus(vecPlus(vecPlus(vtxA, vecScalar(nudge * LITTLE_SPACE, vecNormalize(edgeAB))),
+																								vecScalar(nudge * LITTLE_SPACE, vecNormalize(edgeAC))),
+																								vecScalar(nudge * LITTLE_SPACE, vecNormalize(edgeAD)));
+		let adjEdgeAB = vecMinus(edgeAB, vecScalar(2 * nudge * LITTLE_SPACE, vecNormalize(edgeAB)));
+		let adjEdgeAC = vecMinus(edgeAC, vecScalar(2 * nudge * LITTLE_SPACE, vecNormalize(edgeAC)));
+		let adjEdgeAD = vecMinus(edgeAD, vecScalar(2 * nudge * LITTLE_SPACE, vecNormalize(edgeAD)));
 		let oppVtx = vecPlus(vecPlus(vecPlus(adjVtxA, adjEdgeAB), adjEdgeAC), adjEdgeAD);
 		let adjEdgeBA = vecScalar(-1, adjEdgeAB);
 		let adjEdgeCA = vecScalar(-1, adjEdgeAC);
@@ -221,6 +227,23 @@ class Ball {	// normally use this instead of Sphere (to leave a LITTLE_SPACE)
 	}
 }
 
+class Can {
+	constructor(shapes, centre, axis, radius, halfHeight, baseColourAround, baseColourCaps, material) {
+		shapes.push(new Cylinder(centre, axis, radius - LITTLE_SPACE, halfHeight - LITTLE_SPACE / 2, true, baseColourAround, material));
+		shapes.push(new Disc(vecPlus(centre, vecScalar(halfHeight, vecNormalize(axis))), radius - LITTLE_SPACE, axis, baseColourCaps, material));
+		shapes.push(new Disc(vecPlus(centre, vecScalar(-halfHeight, vecNormalize(axis))), radius - LITTLE_SPACE, vecScalar(-1, axis), baseColourCaps, material));
+	}
+}
+
+class Tube {
+	constructor(shapes, centre, axis, outerRadius, innerRadius, halfHeight, baseColourAround, baseColourCaps, material) {
+		shapes.push(new Cylinder(centre, axis, outerRadius - LITTLE_SPACE, halfHeight - LITTLE_SPACE, true, baseColourAround, material));
+		shapes.push(new Cylinder(centre, axis, innerRadius + LITTLE_SPACE, halfHeight - LITTLE_SPACE, false, baseColourAround, material));
+		shapes.push(new Annulus(vecPlus(centre, vecScalar(halfHeight - LITTLE_SPACE, vecNormalize(axis))), outerRadius - LITTLE_SPACE, innerRadius + LITTLE_SPACE, axis, baseColourCaps, material));
+		shapes.push(new Annulus(vecPlus(centre, vecScalar(-(halfHeight - LITTLE_SPACE), vecNormalize(axis))), outerRadius - LITTLE_SPACE, innerRadius + LITTLE_SPACE, vecScalar(-1, axis), baseColourCaps, material));
+	}
+}
+
 class Halfball {	// normalDir points away from hemisphere direction (so disc is on top)
 	constructor(shapes, centre, radius, normalDir, truncateMin, truncateMax, baseColour, material) {
 		let adjTrMin = (truncateMin == undefined) ? LITTLE_SPACE : truncateMin + LITTLE_SPACE;
@@ -281,22 +304,23 @@ class Shape {
 }
 
 class Cylinder extends Shape {
-	// to do: make Band primitive that is Cylinder with limited height; make Tube, Cup, and Can forms (cylinder with 0, 1, 2 caps resp.)
-  constructor(centre, axis, height, radius, baseColour, material) {
+	// to do: make Tube, Cup, and Can forms (cylinder with 0, 1, 2 caps resp.)
+  constructor(centre, axis, radius, halfHeight, convex, baseColour, material) {
 		super();
 		
 		this.type = 'cylinder';
 		this.centre = centre;
 		this.axis = vecNormalize(axis);
-		this.height = height;
 		this.radius = radius;
+		this.halfHeight = halfHeight;
+		this.convex = convex;	// if true, surface points away from centre
 		this.baseColour = baseColour || COL_WHITE;
 		this.material = material;
 	}
     
   normal(p) {
 		let v = vecMinus(p, this.centre);
-		return vecScalar(1 / this.radius, vecMinus(v, vecScalar(vecDot(v, this.axis), this.axis)) );
+		return vecScalar((this.convex ? 1 : -1) / this.radius, vecMinus(v, vecScalar(vecDot(v, this.axis), this.axis)));
 	}
 }
 
@@ -415,6 +439,7 @@ class Ray {
 		this.dir = vecNormalize(dir);
 	}
 
+	// to do: try moving this out of class to see if it speeds things up
 	intersectDist(shape) {
 		switch (shape.type) {
 			case 'plane': {
@@ -468,6 +493,7 @@ class Ray {
 			} case 'cylinder': {
 				let centre = shape.centre;
 				let axis = shape.axis;
+				let h = shape.halfHeight;
 				let v = vecMinus(this.origin, centre);
 				
 				let vd = vecDot(v, this.dir);
@@ -479,11 +505,19 @@ class Ray {
 				let c = vecSqLength(v) - va * va - shape.radius * shape.radius;
 
 				let t = qRoots(a, halfB, c);
+				if (t == undefined) {
+					return undefined;
+				} else {
+					for (let i in [0, 1]) {	// check intersections to see whether they're in positive direction along ray and in the proper halfspace (at distance within min / max truncation)
+						if (t[i] > EPSILON) {
+							if (h == undefined) { return t[i]; }	// cylinder is infinite; no need to check height
 
-				if (t == undefined || t[0] <= 0) {
+							let pos = vecPlus(this.origin, vecScalar(t[i], this.dir));
+							if (Math.abs(vecDot(vecMinus(pos, centre), axis)) < h - EPSILON) { return t[i]; }	// hits within height of cylinder
+						}
+					}
 					return undefined;
 				}
-				return t[0];
 			} case 'triangle': {
 				// Möller-Trumbore algorithm
 				let h = vecCross(this.dir, shape.edgeAC);
@@ -577,7 +611,7 @@ class Camera {
 		this.origin = origin;
 		this.width = width;
 		this.height = height;
-		this.fieldOfView = fieldOfView || 45;
+		this.fieldOfView = fieldOfView || 60;
 		this.fovRadians = Math.PI / 180 * (this.fieldOfView / 2);
 		this.fovScaleWidth = Math.tan(this.fovRadians);
 		this.fovScaleHeight = this.fovScaleWidth * this.height / this.width;
@@ -685,9 +719,9 @@ class Scene {
 				new Ball(this.shapes, [-1, 14, 2], 2, COL_WHITE, MAT_MIRROR);
 
 				new Spotlight(this.shapes, this.lights, [0, 0, 10], 0.5, [0, 0, -1], 40);
-				new Spotlight(this.shapes, this.lights, [-6, 10, 4.5], 0.5, [1, 0, -1], 10), COL_FIRE_ENGINE_RED;
-				new Spotlight(this.shapes, this.lights, [-3, 10, 5.5], 0.5, [0, 0, -1], 10, COL_LIME_GREEN);
-				new Spotlight(this.shapes, this.lights, [0, 10, 4.5], 0.5, [-1, 0, -1], 10, COL_DEEP_BLUE);
+				new Spotlight(this.shapes, this.lights, [-6, 10, 4.5], 0.5, [1, 0, -1], 40), COL_FIRE_ENGINE_RED;
+				new Spotlight(this.shapes, this.lights, [-3, 10, 5.5], 0.5, [0, 0, -1], 40, COL_LIME_GREEN);
+				new Spotlight(this.shapes, this.lights, [0, 10, 4.5], 0.5, [-1, 0, -1], 40, COL_DEEP_BLUE);
 				this.camera = new Camera([-2.3, -6, 5], [0, 1, -0.2], [0, 0, 1], this.canvasWidth, this.canvasHeight);
 				break;
 			case 2:
@@ -733,42 +767,27 @@ class Scene {
 				this.camera = new Camera([-2.3, -4.6, 2.0], [0.3, 1, -0.12], [0, 0, 1], this.canvasWidth, this.canvasHeight);
 				break;
 			case 3:
-				// needs to be updated to current code
 				this.shapes = [
-					new Plane([0, 0, 0], [0, 0, 1], COL_GREY, 0.6),
-					new Plane([0, 16, 0], [0, -1, 0], COL_VERY_DARK_GREY, 0.02),
+					new Plane([0, 0, 0], [0, 0, 1], COL_GREY, MAT_LINOLEUM),
+/*					new Plane([0, 16, 0], [0, -1, 0], COL_VERY_DARK_GREY, MAT_PLASTER),
 					new Plane([0, -16, 0], [0, 1, 0], COL_VERY_DARK_GREY, 0.02),
 					new Plane([16, 0, 0], [-1, 0, 0], COL_DARK_GREY, 0.02),
-					new Plane([-16, 0, 0], [1, 0, 0], COL_DARK_GREY, 0.02),
+					new Plane([-16, 0, 0], [1, 0, 0], COL_DARK_GREY, 0.02),*/
+				];				
 
-/*				new Sphere([4, 2, 3], 3, COL_RAW_UMBER, 0.2),
-
-					new Sphere([-2.5, -1.2, 0.6], 0.6, COL_SILVER, 0.98, MAT_GLASS),
-					new Sphere([-2.5, -1.2, 0.6], 0.05, COL_SILVER, 0.98, MAT_AIR),
-
-					new Sphere([-1, -1.2, 0.6], 0.6, COL_SILVER, 0.98, MAT_GLASS),
-					new Sphere([-1, -1.2, 0.6], 0.3, COL_SILVER, 0.98, MAT_AIR),
-
-					new Sphere([0.5, -1.2, 0.6], 0.6, COL_SILVER, 0.98, MAT_GLASS),
-					new Sphere([0.5, -1.2, 0.6], 0.55, COL_SILVER, 0.98, MAT_AIR),*/
-				];
-				/*new Bowl(this.shapes, [0, -1, 1], 1, 0.9, [0, 0, 1], COL_WHITE, 0.97, MAT_GLASS);*/
-				new Halfball(this.shapes, [0, -1, 1], 0.9, [0, 0, 1], 0.3, undefined, COL_WHITE, 0.97, MAT_WATER);/*
-				new Box(this.shapes, [-0.1, -1, 0.15], [0.1, 0, 0], [0, 0.1, 0], [0.5, 0, 1.8], COL_RAW_UMBER, 0.1);
-				new Cuboctahedron(this.shapes, [-0.7, 1, 0], [1.2, 0, 0], [0, 1.2, 0], [0, 0, 1.2], COL_DEEP_BLUE, COL_DEEP_PINK, 0.3)*/
-				new Bowl(this.shapes, [-2.3, 1, 1], 1, 0.8, [0, 0, 1], COL_DEEP_BLUE, 0.3);
-				new Ball(this.shapes, [-2.3, 1, 0.7], 0.5, COL_GRAPEFRUIT_YELLOW, 0.3);
-				new Ball(this.shapes, [0.35, -0.8, 2.8], 0.3, COL_ORANGE_ORANGE, 0.3);
-				new Ball(this.shapes, [-0.4, 3.5, 2], 2, COL_RAW_UMBER, 0.6);
-				new Cuboctahedron(this.shapes, [-0.7, -2, 0], [2.5, 0, 0], [0, 2.5, 0], [0, 0, 2.5], COL_DEEP_PINK, COL_DARK_GREY, 0.3);
-
-				//new Box(this.shapes, [-2, 0.5, 0], [1, 0, 0], [0, 4.5, 0], [0, 0, 1.3], COL_AMETHYST, 0.1, MAT_OPAQUE);
-				//new Prism(this.shapes, [0, 2, 0], [1, 0, 0], [0, 4, 0], [0, 0, 0.5], COL_LIME_GREEN, 0.8, MAT_GLASS);
+        new Bowl(this.shapes, [-2.3, 1, 1], 1, 0.8, [0, 0, 1], COL_DEEP_BLUE, MAT_COPPER);
+				new Ball(this.shapes, [-2.3, 1, 0.7], 0.5, COL_GRAPEFRUIT_YELLOW, MAT_PLASTER);
+				new Ball(this.shapes, [0.35, -0.8, 2.8], 0.3, COL_ORANGE_ORANGE, MAT_PLASTER);
+				new Ball(this.shapes, [-0.4, 3.5, 2], 2, COL_RAW_UMBER, MAT_PLASTER);
+				
+        new Cuboctahedron(this.shapes, [-0.7, -2, 0], [2.5, 0, 0], [0, 2.5, 0], [0, 0, 2.5], COL_DEEP_PINK, COL_DARK_GREY, MAT_PLASTER);
 
 				this.shapes[0].colour = function(p) {
 					let index = ((Math.floor((0.6 * p[0] + 0.8 * p[1] + 0.7) / 3.2) + Math.floor((0.8 * p[0] - 0.6 * p[1] + 0.2) / 3.2)) & 1);
 					return [COL_WHITE, COL_BLACK][index];
 				}
+        
+        new Spotlight(this.shapes, this.lights, [0, -2, 8.5], 1, [0, 0.1, -1], 40);
 
 				this.camera = new Camera([-3.3, -8, 4.5], [0.4, 1, -0.4], [0, 0, 1], this.canvasWidth, this.canvasHeight);
 				break;
@@ -789,7 +808,7 @@ class Scene {
 				new Ball(this.shapes, [0, 0, 2], 2, COL_RAW_UMBER, MAT_COPPER);
 				new Ball(this.shapes, [3.2, 0.4, 1], 1, COL_LIME_GREEN, MAT_PLASTER);
 				
-				new Prism(this.shapes, [-3, -2.5, 0], [9, -0.6, 0], [9, 0.2, 0], [0, 0, 2.2], COL_WHITE, MAT_GLASS);
+				new Prism(this.shapes, [-3, -2.5, 0], [9, -2.6, 0], [9, 0.2, 0], [0, 0, 2.2], COL_WHITE, MAT_GLASS);
 				
 				new Spotlight(this.shapes, this.lights, [-1, -3, 8.5], 1, [0, 0, -1], 40);
 				new Spotlight(this.shapes, this.lights, [-6, 0, 6.5], 1, [1, 0, -1], 40);
@@ -1015,7 +1034,129 @@ class Scene {
 
 				this.camera = new Camera([-2, -13.6, 3], [0.2, 1, 0], [0, 0, 1], this.canvasWidth, this.canvasHeight);
 				break;
+			case 9:
+				this.shapes = [
+					new Plane([0, 0, 0], [0, 0, 1], COL_SILVER, MAT_LINOLEUM),
+					new Plane([0, 4, 0], [0, -1, 0], COL_GRAPEFRUIT_YELLOW, MAT_PLASTER),
+					new Plane([0, -14, 0], [0, 1, 0], COL_GREY, MAT_PLASTER),
+					new Plane([4, 0, 0], [-1, 0, 0], COL_SKY_BLUE, MAT_PLASTER),
+					new Plane([-4, 0, 0], [1, 0, 0], COL_FIRE_ENGINE_RED, MAT_PLASTER),
+					new Plane([0, 0, 8], [0, 0, -1], COL_DARK_GREY, MAT_PLASTER),
+				]
+
+				new Box(this.shapes, [-3.5, 1.5, 1.5], [7, 0, 0], [0, 2, 0], [0, 0, 3], COL_RAW_UMBER, MAT_PLASTER);
+				new Box(this.shapes, [-3.5, 0.5, 1.5], [7, 0, 0], [0, 1, 0], [0, 0, 2], COL_RAW_UMBER, MAT_PLASTER);
+				new Box(this.shapes, [-3.5, -0.5, 1.5], [7, 0, 0], [0, 1, 0], [0, 0, 1], COL_RAW_UMBER, MAT_PLASTER);
+				
+				for (let b = 0; b <= 20; b += 4) {
+					let centreX = -3.4 + 6.8 * b / 20;
+					let centreY = 1;
+					let centreZ = 3.65
+					let radius = 0.45
+
+					let colour = {};
+					let colHue = 360 * Math.random();
+					let c = Math.floor(256 * (1 - Math.abs((colHue / 60) % 2 - 1)));					
+					switch (Math.floor(colHue / 60)) {
+						case 0:
+							colour = { r: 255, g: c, b: 0, a: 1 };
+							break;
+						case 1:
+							colour = { r: c, g: 255, b: 0, a: 1 };
+							break;
+						case 2:
+							colour = { r: 0, g: 255, b: c, a: 1 };
+							break;
+						case 3:
+							colour = { r: 0, g: c, b: 255, a: 1 };
+							break;
+						case 4:
+							colour = { r: c, g: 0, b: 255, a: 1 };
+							break;
+						case 5:
+							colour = { r: 255, g: 0, b: c, a: 1 };
+							break;
+						default:
+							throw new Error(`impossible HSV?`);
+							break;
+					}
+					let material = MAT_PLASTER;
+					new Ball(this.shapes, [centreX, centreY, centreZ], radius, colour, material);
+				}
+
+				new Ball(this.shapes, [-2.5, -2, 1], 1, COL_WHITE, MAT_GLASS);
+
+				new Ball(this.shapes, [0, -2, 1], 1, COL_WHITE, MAT_GLASS);
+				new Ball(this.shapes, [0, -2, 1], 0.5, COL_WHITE, MAT_AIR);
+
+				new Ball(this.shapes, [2.5, -2, 1], 1, COL_WHITE, MAT_GLASS);
+				new Ball(this.shapes, [2.5, -2, 1], 0.98, COL_WHITE, MAT_AIR);
+
+				new Spotlight(this.shapes, this.lights, [-1.5, 0.5, 6.5], 0.25, [0.1, 0.3, -1], 40);
+				new Spotlight(this.shapes, this.lights, [0.5, -8.5, 0.5], 0.25, [-0.1, 1, 0.2], 40);
+
+				this.camera = new Camera([-2, -13.6, 3.0], [0.2, 1, -0.1], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+				break;
+			case 'massage therapy office':
+				this.shapes = [
+					new Plane([0, 0, 0], [0, 0, 1], COL_ENGLISH_WALNUT, MAT_PLASTER),
+					new Plane([0, 25, 0], [0, -1, 0], COL_SKY_BLUE, MAT_PLASTER),
+
+					new Plane([0, -13, 0], [0, 1, 0], COL_SKY_BLUE, MAT_PLASTER),
+					new Plane([-9, 0, 0], [-1, 0, 0], COL_SKY_BLUE, MAT_PLASTER),
+					new Plane([-9, 0, 0], [1, 0, 0], COL_SKY_BLUE, MAT_PLASTER),
+					new Plane([0, 0, 100], [0, 0, -1], COL_GREY, MAT_PLASTER),
+				];
+				new Box(this.shapes, [-8, -8, 0], [0, 20, 0], [-1, 0, 0], [0, 0, 10], COL_VANILLA, MAT_PLASTER, 0);
+				new Box(this.shapes, [8, -8, 0], [1, 0, 0], [0, 20, 0], [0, 0, 10], COL_VANILLA, MAT_PLASTER, 0);
+				new Box(this.shapes ,[-8, -8, 10], [16, 0, 0], [0, 20, 0], [0, 0, 10], COL_WARM_GREY, MAT_PLASTER, 0);
+				new Box(this.shapes ,[-8, 12, 0], [16, 0, 0], [0, 1, 0], [0, 0, 5], COL_WARM_GREY, MAT_PLASTER, 0);
+				new Box(this.shapes ,[-8, 12, 8], [16, 0, 0], [0, 1, 0], [0, 0, 2], COL_WARM_GREY, MAT_PLASTER, 0);
+				new Box(this.shapes ,[-8, 12, 0], [8, 0, 0], [0, 1, 0], [0, 0, 10], COL_WARM_GREY, MAT_PLASTER, 0);
+				new Box(this.shapes ,[1.5, 12, 0], [1.5, 0, 0], [0, 1, 0], [0, 0, 10], COL_WARM_GREY, MAT_PLASTER, 0);
+				new Box(this.shapes ,[4.5, 12, 0], [3.5, 0, 0], [0, 1, 0], [0, 0, 10], COL_WARM_GREY, MAT_PLASTER, 0);
+				// windows
+				new Box(this.shapes ,[0, 12.25, 5], [1.5, 0, 0], [0, 0.5, 0], [0, 0, 3], COL_WHITE, MAT_GLASS);
+				new Box(this.shapes ,[3, 12.25, 5], [1.5, 0, 0], [0, 0.5, 0], [0, 0, 3], COL_WHITE, MAT_GLASS);
+				
+				new Box(this.shapes, [-1, 3, 3.8], [7, 0, 0], [0, 3, 0], [0, 0, 0.2], COL_ENGLISH_WALNUT, MAT_PLASTER);
+				new Box(this.shapes, [5.7, 3, 0], [0.3, 0, 0], [0, 0.3, 0], [0, 0, 3.8], COL_ENGLISH_WALNUT, MAT_PLASTER);
+				new Box(this.shapes, [5.7, 5.7, 0], [0.3, 0, 0], [0, 0.3, 0], [0, 0, 3.8], COL_ENGLISH_WALNUT, MAT_PLASTER);
+				new Box(this.shapes, [-1, 5.7, 0], [0.3, 0, 0], [0, 0.3, 0], [0, 0, 3.8], COL_ENGLISH_WALNUT, MAT_PLASTER);
+				new Box(this.shapes, [-1, 3, 0], [0.3, 0, 0], [0, 0.3, 0], [0, 0, 3.8], COL_ENGLISH_WALNUT, MAT_PLASTER);
+
+				// pillow
+				new Box(this.shapes, [4.5, 2.9, 4], [1.4, 0, 0], [0, 2.8, 0], [0, 0, 0.2], COL_WHITE, MAT_PLASTER);
+
+				new Box(this.shapes, [-4, 10, 0], [1.2, 0.3, 0], [-0.3, 1.2, 0], [0, 0, 5], COL_AMETHYST, MAT_COPPER);
+				new Ball(this.shapes, [-3.5, 10.6, 5.4], 0.4, COL_LIME_GREEN, MAT_MIRROR);
+
+				new Bowl(this.shapes, [2, 4, 5], 1, 0.8, [0, 0, 1], COL_WHITE, MAT_GLASS);
+				new Halfball(this.shapes, [2, 4, 5], 0.8, [0, 0, 1], 0.3, undefined, COL_WHITE, MAT_WATER);
+				
+				new Spotlight(this.shapes, this.lights, [0, 5, 8.5], 1, [0, 0, -1], 15);
+				new Spotlight(this.shapes, this.lights, [-8, 14, 10], 1, [5, 12, 0], 30, COL_GRAPEFRUIT_YELLOW);
+				new Spotlight(this.shapes, this.lights, [-8, 22, 10], 1, [10, -10, 0], 45, COL_GRAPEFRUIT_YELLOW);
+
+				this.camera = new Camera([-2.3, -7.6, 5.75], [0.3, 1, 0], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+				break;
+			case 'test':
+				this.shapes = [
+					new Plane([0, 0, 0], [0, 0, 1], COL_ENGLISH_WALNUT, MAT_PLASTER),
+				]
+				/*new Cuboctahedron(this.shapes, [0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], COL_AMETHYST, COL_SCHOOL_BUS_YELLOW, MAT_GLASS);
+				new Cuboctahedron(this.shapes, [2.5, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], COL_AMETHYST, COL_SCHOOL_BUS_YELLOW, MAT_LINOLEUM);
+				new Cuboctahedron(this.shapes, [1.5, 3, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], COL_AMETHYST, COL_SCHOOL_BUS_YELLOW, MAT_MIRROR);
+				new Cuboctahedron(this.shapes, [4, 4, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], COL_AMETHYST, COL_SCHOOL_BUS_YELLOW, MAT_PLASTER);*/
+				new Tube(this.shapes, [0, 0, 1.5], [0, 0, 1], 1, 0.9, 1, COL_DEEP_BLUE, COL_SCHOOL_BUS_YELLOW, MAT_GLASS);
+				new Tube(this.shapes, [3, 1, 2], [1, -1, 3], 1, 0.9, 1, COL_AMETHYST, COL_SCHOOL_BUS_YELLOW, MAT_COPPER);
+				new Tube(this.shapes, [-1, 2, 2.5], [1, 1, 0], 1, 0.9, 1, COL_DEEP_BLUE, COL_ORANGE_ORANGE, MAT_LINOLEUM);
+
+				new Spotlight(this.shapes, this.lights, [0, 5, 8], 1, [0, 0, -1], 40);
+				this.camera = new Camera([-0.6, -3.1, 4.0], [0.5, 1, -0.75], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+				break;
 			default:
+				console.log(`No such scene!`);
 				break;
 		}
     this.initLights();
@@ -1158,7 +1299,7 @@ class Scene {
 		this.ctx.putImageData(imgData, 0, 0);
 		for (let photon of this.photonListBad) {
       let projStart = this.projectToCanvas(photon.origin);
-      let projEnd = this.projectToCanvas(vecPlus(photon.origin, vecScalar(1, photon.dir)));
+      let projEnd = this.projectToCanvas(vecPlus(photon.origin, vecScalar(0.1, photon.dir)));
       if (projStart != undefined && projEnd != undefined && photon.origin[2] < 4) {
         this.ctx.strokeStyle = "red";
         this.ctx.lineWidth = 1;
@@ -1197,6 +1338,7 @@ class Scene {
 				let eta1 = matRefrIndex[materialStack[materialStack.length - 1]];		// current medium
 				let eta2 = (vecDot(photon.dir, normal) < 0) ? minShape.refrIndex : matRefrIndex[materialStack[materialStack.length - 2]];	// enter or exit medium
 				if (eta2 == undefined) {
+					console.log(`hitting interior of shape ${minS}, a ${minShape.type}`);
 					throw new Error("photon exited all materials? check consistency of objects?")
 				}
 				let etaRatio = eta1 / eta2;
@@ -1236,8 +1378,8 @@ class Scene {
 						if (Math.random() < minShape.specular) {	// specular; preserve caustic state
 							let reflectDir = vecPlus(photon.dir, vecScalar(2 * cosTheta1, normal));
 							if (cosTheta1 < 0) {									
-								//console.log(`Photon (depth ${depth} inside an opaque object #${minS}, a ${minShape.type} at ${intersection}`);									
-								//console.log(`  coming from ${photon.origin}, direction ${photon.dir}. Cos(theta) = ${cosTheta1}`);
+								console.log(`Photon (depth ${depth} inside an opaque object #${minS}, a ${minShape.type} at ${intersection}`);
+								console.log(`  coming from ${photon.origin}, direction ${photon.dir}. cos(theta) = ${cosTheta1}`);
 								this.photonListBad.push(new Photon(intersection, reflectDir, photon.power, photon.colour, photon.isCaustic));
 							}
 							let isCaustic = (photon.isCaustic == undefined) ? true : photon.isCaustic;
@@ -1336,7 +1478,7 @@ class Scene {
 
 	traceRay(ray, maxDist, depth, importance, materialStack) {
 		if (importance < 0.01) {
-			return COL_WHITE;
+			return COL_BLACK;
 		}
 
 		if (debug) {
@@ -1391,6 +1533,12 @@ class Scene {
 					let eta1 = matRefrIndex[materialStack[materialStack.length - 1]];		// current medium
 					let eta2 = (vecDot(ray.dir, normal) < 0) ? minShape.refrIndex : matRefrIndex[materialStack[materialStack.length - 2]];	// enter or exit medium
 					if (eta2 == undefined) {
+						console.log(`oh no\n-----`);
+						console.log(`hitting interior of shape ${minS}, a ${minShape.type}`);
+						console.log(`ray dir: ${ray.dir}`);
+						console.log(`normal: ${normal}`);
+						console.log(`refr. index: ${minShape.refrIndex}`);
+						console.log(`material stack: ${materialStack}`);
 						throw new Error("exited all materials: check consistency of objects")
 					}
 					let etaRatio = eta1 / eta2;
@@ -1428,13 +1576,16 @@ class Scene {
 					return transmittedColour;
 				} else {	// not transparent: reflect or absorb
 					if (cosTheta1 < 0) {
-						console.log(`Inside an opaque object #${minS}, a [material ${minShape._material}] ${minShape.type}? at ${intersection}; material stack is ${materialStack}`);
-						console.log(`  coming from ${ray.origin}, direction ${ray.dir}`);
-						let proj = this.projectToCanvas(intersection);
-						this.ctx.strokeStyle = "red";
-						this.ctx.beginPath();
-						this.ctx.arc(proj.x, proj.y, 10, 0, 2 * Math.PI);
-						this.ctx.stroke();
+						if (warnings) {
+							console.log(`Inside an opaque object #${minS}, a [material ${minShape._material}] ${minShape.type}? at ${intersection}; material stack is ${materialStack}`);
+							console.log(`  coming from ${ray.origin}, direction ${ray.dir}`);
+							// draw a red circle around problem spot
+						  let proj = this.projectToCanvas(intersection);
+              this.ctx.strokeStyle = "red";
+              this.ctx.beginPath();
+              this.ctx.arc(proj.x, proj.y, 10, 0, 2 * Math.PI);
+              this.ctx.stroke();
+            }
 						return { r: 0, g: 0, b: 0, a: 1 };
 						//return undefined;
 					} else {
@@ -1508,8 +1659,8 @@ class Scene {
 						for (let component of ["r", "g", "b"]) {
 							rayCol[component] = (1 - minShape.reflectance) * directColour[component];
 							rayCol[component] += transmittedColour[component];
-              //rayCol[component] += photonDiffuseColour[component];
-							//rayCol[component] += photonCausticColour[component];
+              rayCol[component] += photonDiffuseColour[component];
+							rayCol[component] += photonCausticColour[component];
 						}
 						return rayCol;
 					}
@@ -1559,8 +1710,7 @@ class Scene {
 				if (!occulted) {
 					for (let component of ["r", "g", "b"]) {
 						//col[component] += photon.colour[component] / 255 * localColour[component];
-						//col[component] += (photon.colour[component] / 255) * localColour[component] * vecDot(ray.dir, normal) * photon.power / 100;
-						col[component] += (photon.colour[component] / 255) * localColour[component] * vecDot(ray.dir, normal);// * photon.power / 100;
+						col[component] += (photon.colour[component] / 255) * localColour[component] * vecDot(ray.dir, normal) * photon.power / 40;
 					}
 				}
 			}
@@ -1664,7 +1814,7 @@ function main() {
 	ctx.width = canvas.width;
   
  	let scene = new Scene(ctx);
-  scene.loadPreset(4);
+  scene.loadPreset('test');
   scene.drawPhotons();
   
   let drawing = false;
@@ -1712,20 +1862,7 @@ function main() {
 		if (key == 84) {	// t
 			// do some unrelated test
 
-			let testSize = 10000;
-			let now = Date.now();
-			for (let i = 0; i < testSize; i++) {
-				let point = [10 * Math.random(), 10 * Math.random(), 10 * Math.random()];
-				let nnad = scene.photonKdTDiffuse.nearestNeighbourAndDistance(point);
-			}
-			console.log(`nnad: ${Date.now() - now}`);
-
-			now = Date.now();
-			for (let i = 0; i < testSize; i++) {
-				let point = [10 * Math.random(), 10 * Math.random(), 10 * Math.random()];
-				let nn = scene.photonKdTDiffuse.nearestNeighbours(point, 0.5);
-			}
-			console.log(`nn 0.5: ${Date.now() - now}`);
+			console.log(scene.camera.origin);
 		}
 
 		if (key == 32) {	// space
@@ -1744,7 +1881,7 @@ function main() {
 		//return;
 		let mousePos = getMousePos(canvas, evt);
         
-		let radius = 10 / SUB_SAMPLE;
+		let radius = 40 / SUB_SAMPLE;
 		for (let y = -radius; y <= radius; y++) {
 			for (let x = -radius; x <= radius; x++) {
 				if (x * x + y * y <= radius * radius) {
@@ -1755,7 +1892,7 @@ function main() {
 	}, false);
 
 	canvas.addEventListener('click', function(evt) {
-		return;
+		//return;
 		debug = true;
 		let mousePos = getMousePos(canvas, evt);
 
@@ -1832,7 +1969,28 @@ function main() {
 			for (let y = 0; y < tilesY; y += SUPER_SAMPLE_BASE ** scale) {
 				for (let x = 0; x < tilesX; x += SUPER_SAMPLE_BASE ** scale) {
 					if (tilePhotons[y * tilesX + x] == undefined) { tilePhotons[y * tilesX + x] = 0; }
-					tiles.push({ region: [x * tileSize, y * tileSize], photons: tilePhotons[y * tilesX + x] || 0, scale: scale });
+					// old heuristic: first draw regions with many photons in them
+					//tiles.push({ region: [x * tileSize, y * tileSize], photons: tilePhotons[y * tilesX + x] || 0, scale: scale });
+
+					// new heuristic: first draw regions at boundaries between many and few photons; this helps define shadow outlines, etc. (before, shadows were normally left to the end, which was okay except at edges)
+					let photonDiff = 0;
+					for (let j = -2; j <= 2; j++) {
+						if (y + j >= 0 && y + j < tilesY) {
+							for (let i = -2; i <= 2; i++) {
+								if (x + i >= 0 && x + i < tilesX) {
+									if (i != 0 || j != 0) {
+										photonDiff += ((tilePhotons[y * tilesX + x] - tilePhotons[(y + j) * tilesX + (x + i)]) ** 2) / (i * i + j * j) || 0;
+									}
+								}
+							}
+						}
+					}
+					/*if (x > 0) 					{ photonDiff += (tilePhotons[y * tilesX + x] - tilePhotons[y * tilesX + (x - 1)]) ** 2 || 0};
+					if (x < tilesX - 1) { photonDiff += (tilePhotons[y * tilesX + x] - tilePhotons[y * tilesX + (x + 1)]) ** 2 || 0};
+					if (y > 0) 					{ photonDiff += (tilePhotons[y * tilesX + x] - tilePhotons[(y - 1) * tilesX + x]) ** 2 || 0};
+					if (y < tilesY - 1) { photonDiff += (tilePhotons[y * tilesX + x] - tilePhotons[(y + 1) * tilesX + x]) ** 2 || 0};*/
+
+					tiles.push({ region: [x * tileSize, y * tileSize], photonDiff: photonDiff, scale: scale });
 				}
 			}
 
@@ -1854,7 +2012,17 @@ function main() {
 		}
 
 		shuffle(tiles);	// shuffle first so that when it gets to all the (e.g.) 1-photon tiles, it doesn't just go row by row
-		tiles.sort( (a, b) => (a.photons == b.photons) ? a.scale - b.scale : a.photons - b.photons);	// sort by # photons, but if same number, make sure to draw bigger tiles first
+		//tiles.sort( (a, b) => (a.photons == b.photons) ? a.scale - b.scale : a.photons - b.photons);	// sort by # photons, but if same number, make sure to draw bigger tiles first
+		tiles.sort(function(a, b) {
+			if (   (a.region[0] > b.region[0] + tileSize * SUPER_SAMPLE_BASE ** b.scale)
+					|| (a.region[1] > b.region[1] + tileSize * SUPER_SAMPLE_BASE ** b.scale)
+					|| (b.region[0] > a.region[0] + tileSize * SUPER_SAMPLE_BASE ** a.scale)
+					|| (b.region[1] > a.region[1] + tileSize * SUPER_SAMPLE_BASE ** a.scale)) {	// tiles don't overlap; draw more interesting ones first (i.e., favour edges between dense & sparse photon areas)
+				return a.photonDiff - b.photonDiff;
+			} else {	// tiles do overlap; draw bigger one first
+				return a.scale - b.scale;
+			}
+		});
 
 		trace = setInterval(function() {
 			if (tiles.length && drawing) {
