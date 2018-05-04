@@ -3,8 +3,8 @@ let debug = false;
 const EPSILON = 1e-6;
 const LITTLE_SPACE = 1e-3;	// let's leave room between things, e.g., don't put them right on the floor. Used automatically in object constructors, not primitives: e.g., use Ball instead of Sphere
 const MAX_TRACE_DIST = 100;
-const MAX_DEPTH = 10;
-const SUB_SAMPLE = 3;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
+const MAX_DEPTH = 20;
+const SUB_SAMPLE = 2;   // split each pixel into virtual SUB_SAMPLE × SUB_SAMPLE grid, then average results.
 
 // --------------------------------
 //            colours
@@ -37,11 +37,31 @@ const MAT_WATER = 3;
 // --------------------------------
 // materials: indices of refraction
 // --------------------------------
-const refr_index = [];
-refr_index[MAT_AIR] = 1.0;
-refr_index[MAT_OPAQUE] = undefined;
-refr_index[MAT_GLASS] = 1.5;
-refr_index[MAT_WATER] = 1.33;
+const matRefrIndex = [];
+matRefrIndex[MAT_AIR] = 1.0;
+matRefrIndex[MAT_OPAQUE] = undefined;
+matRefrIndex[MAT_GLASS] = 1.5;
+matRefrIndex[MAT_WATER] = 1.33;
+// --------------------------------
+// materials: reflectance
+// --------------------------------
+// to do: 1) get rid of reflectance and specular in object constructors; specify them automatically based on material
+//        2) therefore add variety of materials with different reflectance and specular coeffs
+//        3) add flag for whether material refracts or not (currently checking MAT_OPAQUE; get rid of that)
+const matRefl = [];
+matRefl[MAT_AIR] = 0;
+matRefl[MAT_OPAQUE] = 0.2;
+matRefl[MAT_GLASS] = 1;
+matRefl[MAT_WATER] = 1;
+// --------------------------------
+// materials: specular (as fraction of reflectance; remainder is Lambertian, i.e., diffuse)
+// --------------------------------
+const matSpec = [];
+matSpec[MAT_AIR] = 0;
+matSpec[MAT_OPAQUE] = 0.5;
+matSpec[MAT_GLASS] = 1;
+matSpec[MAT_WATER] = 1;
+
 
 function vecPlus(v, w) { return [v[0] + w[0], v[1] + w[1], v[2] + w[2]]; }
 function vecMinus(v, w) { return[v[0] - w[0], v[1] - w[1], v[2] - w[2]]; }
@@ -82,7 +102,7 @@ function vecPerturb(v, maxDeviation) {	// create random vector chosen around v w
 function colour(col) { return { r: col.r, g: col.g, b: col.b, a: col.a } };
 
 class Box {		// actually a parallelepiped
-	constructor(shapes, vtxA, edgeAB, edgeAC, edgeAD, baseColour, shine, material) {
+	constructor(shapes, vtxA, edgeAB, edgeAC, edgeAD, baseColour, reflectance, specular, material) {
 		let adjVtxA = vecPlus(vecPlus(vecPlus(vtxA, vecScalar(LITTLE_SPACE, vecNormalize(edgeAB))),
 																								vecScalar(LITTLE_SPACE, vecNormalize(edgeAC))),
 																								vecScalar(LITTLE_SPACE, vecNormalize(edgeAD)));
@@ -94,17 +114,17 @@ class Box {		// actually a parallelepiped
 		let adjEdgeCA = vecScalar(-1, adjEdgeAC);
 		let adjEdgeDA = vecScalar(-1, adjEdgeAD);
 
-		shapes.push(new Square(adjVtxA, adjEdgeAC, adjEdgeAB, baseColour, shine, material));
-		shapes.push(new Square(adjVtxA, adjEdgeAD, adjEdgeAC, baseColour, shine, material));
-		shapes.push(new Square(adjVtxA, adjEdgeAB, adjEdgeAD, baseColour, shine, material));
-		shapes.push(new Square(oppVtx, adjEdgeBA, adjEdgeCA, baseColour, shine, material));
-		shapes.push(new Square(oppVtx, adjEdgeCA, adjEdgeDA, baseColour, shine, material));
-		shapes.push(new Square(oppVtx, adjEdgeDA, adjEdgeBA, baseColour, shine, material));					
+		shapes.push(new Square(adjVtxA, adjEdgeAC, adjEdgeAB, baseColour, reflectance, specular, material));
+		shapes.push(new Square(adjVtxA, adjEdgeAD, adjEdgeAC, baseColour, reflectance, specular, material));
+		shapes.push(new Square(adjVtxA, adjEdgeAB, adjEdgeAD, baseColour, reflectance, specular, material));
+		shapes.push(new Square(oppVtx, adjEdgeBA, adjEdgeCA, baseColour, reflectance, specular, material));
+		shapes.push(new Square(oppVtx, adjEdgeCA, adjEdgeDA, baseColour, reflectance, specular, material));
+		shapes.push(new Square(oppVtx, adjEdgeDA, adjEdgeBA, baseColour, reflectance, specular, material));					
 	}
 }
 
 class Prism {		// triangular prism: ABC is triangle; square base in ABD plane
-	constructor(shapes, vtxA, edgeAB, edgeAC, edgeAD, baseColour, shine, material) {
+	constructor(shapes, vtxA, edgeAB, edgeAC, edgeAD, baseColour, reflectance, specular, material) {
 		let adjVtxA = vecPlus(vecPlus(vecPlus(vtxA, vecScalar(LITTLE_SPACE, vecNormalize(edgeAB))),
 																								vecScalar(LITTLE_SPACE, vecNormalize(edgeAC))),
 																								vecScalar(LITTLE_SPACE, vecNormalize(edgeAD)));
@@ -116,16 +136,16 @@ class Prism {		// triangular prism: ABC is triangle; square base in ABD plane
 		let adjEdgeCB = vecPlus(adjEdgeCA, adjEdgeAB);
 		let adjEdgeDA = vecScalar(-1, adjEdgeAD);
 
-		shapes.push(new Triangle(adjVtxA, adjEdgeAC, adjEdgeAB, baseColour, shine, material));
-		shapes.push(new Square(adjVtxA, adjEdgeAD, adjEdgeAC, baseColour, shine, material));
-		shapes.push(new Square(adjVtxA, adjEdgeAB, adjEdgeAD, baseColour, shine, material));
-		shapes.push(new Triangle(oppVtx, adjEdgeCA, adjEdgeCB, baseColour, shine, material));
-		shapes.push(new Square(oppVtx, adjEdgeCB, adjEdgeDA, baseColour, shine, material));					
+		shapes.push(new Triangle(adjVtxA, adjEdgeAC, adjEdgeAB, baseColour, reflectance, specular, material));
+		shapes.push(new Square(adjVtxA, adjEdgeAD, adjEdgeAC, baseColour, reflectance, specular, material));
+		shapes.push(new Square(adjVtxA, adjEdgeAB, adjEdgeAD, baseColour, reflectance, specular, material));
+		shapes.push(new Triangle(oppVtx, adjEdgeCA, adjEdgeCB, baseColour, reflectance, specular, material));
+		shapes.push(new Square(oppVtx, adjEdgeCB, adjEdgeDA, baseColour, reflectance, specular, material));					
 	}
 }
 
 class Cuboctahedron {		// start with cube, cut off corners (which is why A is called chopped vertex; B, C, D are also chopped)
-	constructor(shapes, choppedVtxA, edgeAB, edgeAC, edgeAD, baseColourSquare, baseColourTriangle, shine, material) {
+	constructor(shapes, choppedVtxA, edgeAB, edgeAC, edgeAD, baseColourSquare, baseColourTriangle, reflectance, specular, material) {
 		let adjVtxA = vecPlus(vecPlus(vecPlus(choppedVtxA, vecScalar(LITTLE_SPACE, vecNormalize(edgeAB))),
 																											 vecScalar(LITTLE_SPACE, vecNormalize(edgeAC))),
 																											 vecScalar(LITTLE_SPACE, vecNormalize(edgeAD)));
@@ -145,67 +165,83 @@ class Cuboctahedron {		// start with cube, cut off corners (which is why A is ca
 		let us = vecPlus(ds, vecScalar(1 - 2 * LITTLE_SPACE / vecLength(edgeAD), edgeAD));
 		let uw = vecPlus(dw, vecScalar(1 - 2 * LITTLE_SPACE / vecLength(edgeAD), edgeAD));
 
-		shapes.push(new Square(ds, vecMinus(dw, ds), vecMinus(de, ds), baseColourSquare, shine, material));
-		shapes.push(new Square(ne, vecMinus(dn, ne), vecMinus(un, ne), baseColourSquare, shine, material));
-		shapes.push(new Square(se, vecMinus(de, se), vecMinus(ue, se), baseColourSquare, shine, material));
-		shapes.push(new Square(sw, vecMinus(ds, sw), vecMinus(us, sw), baseColourSquare, shine, material));
-		shapes.push(new Square(nw, vecMinus(dw, nw), vecMinus(uw, nw), baseColourSquare, shine, material));
-		shapes.push(new Square(us, vecMinus(ue, us), vecMinus(uw, us), baseColourSquare, shine, material));
+		shapes.push(new Square(ds, vecMinus(dw, ds), vecMinus(de, ds), baseColourSquare, reflectance, specular, material));
+		shapes.push(new Square(ne, vecMinus(dn, ne), vecMinus(un, ne), baseColourSquare, reflectance, specular, material));
+		shapes.push(new Square(se, vecMinus(de, se), vecMinus(ue, se), baseColourSquare, reflectance, specular, material));
+		shapes.push(new Square(sw, vecMinus(ds, sw), vecMinus(us, sw), baseColourSquare, reflectance, specular, material));
+		shapes.push(new Square(nw, vecMinus(dw, nw), vecMinus(uw, nw), baseColourSquare, reflectance, specular, material));
+		shapes.push(new Square(us, vecMinus(ue, us), vecMinus(uw, us), baseColourSquare, reflectance, specular, material));
 	
-		shapes.push(new Triangle(dn, vecMinus(ne, dn), vecMinus(de, dn), baseColourTriangle, shine, material));
-		shapes.push(new Triangle(de, vecMinus(se, de), vecMinus(ds, de), baseColourTriangle, shine, material));
-		shapes.push(new Triangle(ds, vecMinus(sw, ds), vecMinus(dw, ds), baseColourTriangle, shine, material));
-		shapes.push(new Triangle(dw, vecMinus(nw, dw), vecMinus(dn, dw), baseColourTriangle, shine, material));
-		shapes.push(new Triangle(un, vecMinus(ue, un), vecMinus(ne, un), baseColourTriangle, shine, material));
-		shapes.push(new Triangle(ue, vecMinus(us, ue), vecMinus(se, ue), baseColourTriangle, shine, material));
-		shapes.push(new Triangle(us, vecMinus(uw, us), vecMinus(sw, us), baseColourTriangle, shine, material));
-		shapes.push(new Triangle(uw, vecMinus(un, uw), vecMinus(nw, uw), baseColourTriangle, shine, material));
+		shapes.push(new Triangle(dn, vecMinus(ne, dn), vecMinus(de, dn), baseColourTriangle, reflectance, specular, material));
+		shapes.push(new Triangle(de, vecMinus(se, de), vecMinus(ds, de), baseColourTriangle, reflectance, specular, material));
+		shapes.push(new Triangle(ds, vecMinus(sw, ds), vecMinus(dw, ds), baseColourTriangle, reflectance, specular, material));
+		shapes.push(new Triangle(dw, vecMinus(nw, dw), vecMinus(dn, dw), baseColourTriangle, reflectance, specular, material));
+		shapes.push(new Triangle(un, vecMinus(ue, un), vecMinus(ne, un), baseColourTriangle, reflectance, specular, material));
+		shapes.push(new Triangle(ue, vecMinus(us, ue), vecMinus(se, ue), baseColourTriangle, reflectance, specular, material));
+		shapes.push(new Triangle(us, vecMinus(uw, us), vecMinus(sw, us), baseColourTriangle, reflectance, specular, material));
+		shapes.push(new Triangle(uw, vecMinus(un, uw), vecMinus(nw, uw), baseColourTriangle, reflectance, specular, material));
 	}
 }
 
 class Ball {	// normally use this instead of Sphere (to leave a LITTLE_SPACE)
-	constructor(shapes, centre, radius, baseColour, shine, material) {
-		shapes.push(new Sphere(centre, radius - LITTLE_SPACE, baseColour, shine, material));
+	constructor(shapes, centre, radius, baseColour, reflectance, specular, material) {
+		shapes.push(new Sphere(centre, radius - LITTLE_SPACE, baseColour, reflectance, specular, material));
 	}
 }
 
 class Halfball {	// normalDir points away from hemisphere direction (so disc is on top)
-	constructor(shapes, centre, radius, normalDir, truncateMin, truncateMax, baseColour, shine, material) {
-		let adjTrMin = truncateMin + LITTLE_SPACE;
-		let adjTrMax = (truncateMax == undefined) ? undefined: truncateMax - LITTLE_SPACE;
-		shapes.push(new Hemisphere(centre, radius - LITTLE_SPACE, vecScalar(-1, normalDir), adjTrMin, adjTrMax, true, baseColour, shine, material));
-		shapes.push(new Disc(vecPlus(centre, vecScalar(-1 * adjTrMin, vecNormalize(normalDir))), Math.sqrt((radius - LITTLE_SPACE) ** 2 - adjTrMin ** 2), normalDir, baseColour, shine, material));
+	constructor(shapes, centre, radius, normalDir, truncateMin, truncateMax, baseColour, reflectance, specular, material) {
+		let adjTrMin = (truncateMin == undefined) ? LITTLE_SPACE : truncateMin + LITTLE_SPACE;
+		let adjTrMax = (truncateMax == undefined) ? undefined : truncateMax - LITTLE_SPACE;
+		shapes.push(new Hemisphere(centre, radius - LITTLE_SPACE, vecScalar(-1, normalDir), adjTrMin, adjTrMax, true, baseColour, reflectance, specular, material));
+		shapes.push(new Disc(vecPlus(centre, vecScalar(-1 * adjTrMin, vecNormalize(normalDir))), Math.sqrt((radius - LITTLE_SPACE) ** 2 - adjTrMin ** 2), normalDir, baseColour, reflectance, specular, material));
 		if (truncateMax < radius) {  // possibly add cap on other end
-			shapes.push(new Disc(vecPlus(centre, vecScalar(-1 * adjTrMax, vecNormalize(normalDir))), Math.sqrt((radius - LITTLE_SPACE) ** 2 - adjTrMax ** 2), vecScalar(-1, normalDir), baseColour, shine, material));
+			shapes.push(new Disc(vecPlus(centre, vecScalar(-1 * adjTrMax, vecNormalize(normalDir))), Math.sqrt((radius - LITTLE_SPACE) ** 2 - adjTrMax ** 2), vecScalar(-1, normalDir), baseColour, reflectance, specular, material));
 		}
 	}
 }
 
 class Bowl {	// normalDir points in direction of rim
 	// TO DO: add truncate; see Halfball
-	constructor(shapes, centre, outerRadius, innerRadius, normalDir, baseColour, shine, material) {
-		shapes.push(new Hemisphere(centre, outerRadius - LITTLE_SPACE, vecScalar(-1, normalDir), 0, undefined, true, baseColour, shine, material));
-		shapes.push(new Hemisphere(centre, innerRadius + LITTLE_SPACE, vecScalar(-1, normalDir), 0, undefined, false, baseColour, shine, material));
-		shapes.push(new Annulus(centre, outerRadius - LITTLE_SPACE, innerRadius + LITTLE_SPACE, normalDir, baseColour, shine, material));
+	constructor(shapes, centre, outerRadius, innerRadius, normalDir, baseColour, reflectance, specular, material) {
+		shapes.push(new Hemisphere(centre, outerRadius - LITTLE_SPACE, vecScalar(-1, normalDir), 0, undefined, true, baseColour, reflectance, specular, material));
+		shapes.push(new Hemisphere(centre, innerRadius + LITTLE_SPACE, vecScalar(-1, normalDir), 0, undefined, false, baseColour, reflectance, specular, material));
+		shapes.push(new Annulus(centre, outerRadius - LITTLE_SPACE, innerRadius + LITTLE_SPACE, normalDir, baseColour, reflectance, specular, material));
+	}
+}
+
+class Lightbulb {
+	constructor(lights, centre, radius, dir, wattage) {
+		//new 
+	}
+}
+
+class Spotlight {
+	constructor(shapes, lights, centre, radius, dir, wattage) {
+		new Bowl(shapes, centre, 1.25 * radius, radius, dir, COL_COPPER, 0.7, 0.7, MAT_OPAQUE);
+		//shapes.push(new Disc(centre, radius, dir, COL_WHITE, 0.1, 0.7, MAT_OPAQUE));
+		lights.push(new Disc(vecPlus(centre, vecScalar(-0.1 * radius, vecNormalize(dir))), radius, dir, COL_WHITE, 0.1, 0.7, MAT_OPAQUE));
+		//new Lightbulb(lights, centre, radius, dir, wattage);
 	}
 }
 
 // --------------------------------
 //           primitives
 // objects in Shape class are exact
-//  (i.e., don't use LITTLE_SPACE)
+// (i.e., they don't use LITTLE_SPACE)
 // --------------------------------
 class Shape {
 	constructor() {
 		this.baseColour = COL_DARK_GREY;
-		this.shine = 0.5;
+		this.specular = 0.5;
 		this.material = MAT_OPAQUE;
 	}
 	colour() { return this.baseColour; }
 }
 
 class Cylinder extends Shape {
-  constructor(centre, axis, height, radius, baseColour, shine, material) {
+	// to do: make Band primitive that is Cylinder with limited height; make Tube, Cup, and Can forms (cylinder with 0, 1, 2 caps resp.)
+  constructor(centre, axis, height, radius, baseColour, reflectance, specular, material) {
 		super();
 		
 		this.type = 'cylinder';
@@ -214,7 +250,8 @@ class Cylinder extends Shape {
 		this.height = height;
 		this.radius = radius;
 		this.baseColour = baseColour || COL_WHITE;
-		this.shine = (shine == undefined) ? 0.8 : shine;
+		this.reflectance = (reflectance == undefined) ? 0.5 : reflectance;
+		this.specular = (specular == undefined) ? 0.8 : specular;
 		this.material = (material == undefined) ? MAT_OPAQUE : material;
 	}
     
@@ -225,14 +262,15 @@ class Cylinder extends Shape {
 }
 
 class Sphere extends Shape {
-	constructor(centre, radius, baseColour, shine, material) {
+	constructor(centre, radius, baseColour, reflectance, specular, material) {
 		super();
 
 		this.type = 'sphere';
 		this.centre = centre;
 		this.radius = radius;
 		this.baseColour = baseColour || COL_RED;
-		this.shine = (shine == undefined) ? 0.5 : shine;
+		this.reflectance = (reflectance == undefined) ? 0.5 : reflectance;
+		this.specular = (specular == undefined) ? 0.5 : specular;
 		this.material = (material == undefined) ? MAT_OPAQUE : material;
 	}
 
@@ -240,7 +278,7 @@ class Sphere extends Shape {
 }
 
 class Hemisphere extends Shape {	// normalDir points towards half that exists; truncate is minimum distance along normal
-	constructor(centre, radius, normalDir, truncateMin, truncateMax, convex, baseColour, shine, material) {
+	constructor(centre, radius, normalDir, truncateMin, truncateMax, convex, baseColour, reflectance, specular, material) {
 		super();
 
 		this.type = 'hemisphere';
@@ -251,7 +289,8 @@ class Hemisphere extends Shape {	// normalDir points towards half that exists; t
 		this.truncateMax = truncateMax;
 		this.convex = convex;	// if true, surface points away from centre
 		this.baseColour = baseColour || COL_RED;
-		this.shine = (shine == undefined) ? 0.5 : shine;
+		this.reflectance = (reflectance == undefined) ? 0.5 : reflectance;
+		this.specular = (specular == undefined) ? 0.5 : specular;
 		this.material = (material == undefined) ? MAT_OPAQUE : material;
 	}
 
@@ -259,14 +298,15 @@ class Hemisphere extends Shape {	// normalDir points towards half that exists; t
 }
 
 class Plane extends Shape {
-	constructor(origin, normalDir, baseColour, shine, material) {
+	constructor(origin, normalDir, baseColour, reflectance, specular, material) {
 		super();
 
 		this.type = 'plane';
 		this.origin = origin;
 		this.normalDir = vecNormalize(normalDir);
 		this.baseColour = baseColour || COL_DEEP_BLUE;
-		this.shine = (shine == undefined) ? 0.1 : shine;
+		this.reflectance = (reflectance == undefined) ? 0.5 : reflectance;
+		this.specular = (specular == undefined) ? 0.1 : specular;
 		this.material = (material == undefined) ? MAT_OPAQUE : material;
 	}
 
@@ -274,7 +314,7 @@ class Plane extends Shape {
 }
 
 class Triangle extends Shape {
-	constructor(vtxA, edgeAB, edgeAC, baseColour, shine, material) {
+	constructor(vtxA, edgeAB, edgeAC, baseColour, reflectance, specular, material) {
 		super();
 
 		this.type = 'triangle';
@@ -283,7 +323,8 @@ class Triangle extends Shape {
 		this.edgeAC = edgeAC;
 		this.normalDir = vecNormalize(vecCross(this.edgeAB, this.edgeAC));
 		this.baseColour = baseColour || COL_LIME_GREEN;
-		this.shine = (shine == undefined) ? 0.2 : shine;
+		this.reflectance = (reflectance == undefined) ? 0.5 : reflectance;
+		this.specular = (specular == undefined) ? 0.2 : specular;
 		this.material = (material == undefined) ? MAT_OPAQUE : material;
 	}
 
@@ -291,7 +332,7 @@ class Triangle extends Shape {
 }
 
 class Square extends Shape {	// actually a parallelogram
-	constructor(vtxA, edgeAB, edgeAC, baseColour, shine, material) {
+	constructor(vtxA, edgeAB, edgeAC, baseColour, reflectance, specular, material) {
 		super();
 
 		this.type = 'square';
@@ -300,7 +341,8 @@ class Square extends Shape {	// actually a parallelogram
 		this.edgeAC = edgeAC;
 		this.normalDir = vecNormalize(vecCross(this.edgeAB, this.edgeAC));
 		this.baseColour = baseColour || COL_DEEP_PINK;
-		this.shine = (shine == undefined) ? 0.35 : shine;
+		this.reflectance = (reflectance == undefined) ? 0.5 : reflectance;
+		this.specular = (specular == undefined) ? 0.35 : specular;
 		this.material = (material == undefined) ? MAT_OPAQUE : material;
 	}
 
@@ -308,7 +350,7 @@ class Square extends Shape {	// actually a parallelogram
 }
 
 class Disc extends Shape {
-	constructor(centre, radius, normalDir, baseColour, shine, material) {
+	constructor(centre, radius, normalDir, baseColour, reflectance, specular, material) {
 		super();
 
 		this.type = 'disc';
@@ -316,7 +358,8 @@ class Disc extends Shape {
 		this.radius = radius;
 		this.normalDir = vecNormalize(normalDir);
 		this.baseColour = baseColour || COL_DEEP_PINK;
-		this.shine = (shine == undefined) ? 0.5 : shine;
+		this.reflectance = (reflectance == undefined) ? 0.5 : reflectance;
+		this.specular = (specular == undefined) ? 0.5 : specular;
 		this.material = (material == undefined) ? MAT_OPAQUE : material;
 	}
 
@@ -324,7 +367,7 @@ class Disc extends Shape {
 }
 
 class Annulus extends Shape {
-	constructor(centre, outerRadius, innerRadius, normalDir, baseColour, shine, material) {
+	constructor(centre, outerRadius, innerRadius, normalDir, baseColour, reflectance, specular, material) {
 		super();
 
 		this.type = 'annulus';
@@ -333,7 +376,8 @@ class Annulus extends Shape {
 		this.innerRadius = innerRadius;
 		this.normalDir = vecNormalize(normalDir);
 		this.baseColour = baseColour || COL_DEEP_PINK;
-		this.shine = (shine == undefined) ? 0.5 : shine;
+		this.reflectance = (reflectance == undefined) ? 0.5 : reflectance;
+		this.specular = (specular == undefined) ? 0.5 : specular;
 		this.material = (material == undefined) ? MAT_OPAQUE : material;
 	}
 
@@ -522,6 +566,8 @@ class Scene {
 		this.ctx = ctx;
 		this.canvasWidth = ctx.width;
 		this.canvasHeight = ctx.height;
+		this.shapes = [];
+		this.lights = [];
 	}
 
 	loadPreset(def) {
@@ -542,7 +588,6 @@ class Scene {
 					new Sphere([-1.5, -2.5, 0.8], 0.8, COL_ORANGE_ORANGE, 0.25),
 					//new Cylinder([-2.5, 4, 0], [0, 0, 1], 1, 1.5, COL_LIME_GREEN, 0.3),
 				];
-				//this.shapes[0].colour = p => { return (Math.abs(p[0]) % 2 < 1) ? COL_DEEP_BLUE : lightCOL_GREY; };
 				this.shapes[0].colour = function(p) {
 					//let x = Math.floor(p[0]);
 					//let y = Math.floor(p[1]);
@@ -634,29 +679,44 @@ class Scene {
 			case 2:
 				this.shapes = [
 					new Plane([0, 0, 0], [0, 0, 1], COL_GREY, 0.6),
-					new Plane([0, 32, 0], [0, -1, 0], COL_VERY_DARK_GREY, 0.02),
-					new Plane([0, -32, 0], [0, 1, 0], COL_VERY_DARK_GREY, 0.02),
-					new Plane([32, 0, 0], [-1, 0, 0], COL_DARK_GREY, 0.02),
-					new Plane([-32, 0, 0], [1, 0, 0], COL_DARK_GREY, 0.02),
+					new Plane([0, 12, 0], [0, -1, 0], COL_VERY_DARK_GREY, 0.02),
+					new Plane([0, -12, 0], [0, 1, 0], COL_VERY_DARK_GREY, 0.02),
+					new Plane([12, 0, 0], [-1, 0, 0], COL_MAUVE, 0.02),
+					new Plane([-12, 0, 0], [1, 0, 0], COL_MAUVE, 0.02),
 				];
-				new Ball(this.shapes, [-0.5, 0, 1], 1, COL_RED, 0.3),
-				new Ball(this.shapes, [3, 2, 4], 4, COL_LIME_GREEN, 0.7),
-				new Box(this.shapes, [-3, 2, 0], [2, 0, 0], [0, 2, 0], [0, 0, 1.25], COL_DEEP_BLUE);
-				new Prism(this.shapes, [-1.3, -1.5, 0], [1.5, -0.3, 0], [1.5, 0.3, 0], [0, 0, 1.5], COL_WHITE, 0.98, MAT_GLASS);
-				new Ball(this.shapes, [-2.5, -1.5, 0.5], 0.5, COL_SILVER, 0.98, MAT_GLASS);
+				/* new Ball(this.shapes, [-0.5, 0, 1], 1, COL_RED, 0.3, 0.3);
+				new Ball(this.shapes, [3, 2, 4], 4, COL_LIME_GREEN, 0.7, 0.5);
+				new Box(this.shapes, [-3, 2, 0], [2, 0, 0], [0, 2, 0], [0, 0, 1.25], COL_DEEP_BLUE, 0.5, 0.05);
+				new Prism(this.shapes, [-1.3, -1.5, 0], [1.5, -0.3, 0], [1.5, 0.3, 0], [0, 0, 1.5], COL_WHITE, 0.98, 1, MAT_GLASS);*/
+				//new Ball(this.shapes, [1.75, -1, 1.5], 1.5, COL_SILVER, 0.98, 1, MAT_GLASS); 
+				
+				//new Cuboctahedron(this.shapes, [1.7, 2.2, 0], [1.6, 1.2, 0], [-1.2, 1.6, 0], [0, 0, 2], COL_LIME_GREEN, COL_DEEP_BLUE, 0.3, 0.2, MAT_OPAQUE);
+				//new Cuboctahedron(this.shapes, [-1, -2, 0], [1.2, 1.6, 0], [-1.6, 1.2, 0], [0, 0, 2], COL_GRAPEFRUIT_YELLOW, COL_ORANGE_ORANGE, 0.3, 0.2, MAT_OPAQUE);
 
 				this.shapes[0].colour = function(p) {
-					let x = Math.abs((p[0] + 100.7) % 0.3 - 0.15);
-					let y = Math.abs((p[1] + 102.7) % 0.3 - 0.15);
+					let x = Math.abs((p[0] + 100.7) % 2.3 - 1.15);
+					let y = Math.abs((p[1] + 102.7) % 2.3 - 1.15);
 					let index = 0;
-					if (x < 0.01 || y < 0.01 || x + y < 0.08) {
+					if (x < 0.03 || y < 0.03 || x + y < 0.6) {
 						index = 1;
 					}
 					//let index = (Math.floor((p[0] + 0.7) / 0.32) + Math.floor((p[1] + 14.2) / 0.32)) & 1;
 					return [COL_WHITE, COL_BLACK][index];
 				}
 
-				this.camera = new Camera([-2.8, -9, 2.15], [0.3, 1, -0.1], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+				//new Ball(this.shapes, [3, 2, 4], 4, COL_LIME_GREEN, 0.7, 0.5);
+
+				/*for (let x = -5; x < 5; x++) {
+					for (let y = -5; y < 5; y++) {
+						new Ball(this.shapes, [x, y, 0.4], 0.4, COL_WHITE, 0.98, 1, MAT_GLASS);
+					}
+				}*/
+
+				new Spotlight(this.shapes, this.lights, [0, -2, 1.5], 1, [0, 0, 1], 40);
+				new Spotlight(this.shapes, this.lights, [0, 10, 1.5], 1, [0, -1, 0], 40);
+
+				this.camera = new Camera([-2.8, -9, 2.5], [0.3, 1, -0.12], [0, 0, 1], this.canvasWidth, this.canvasHeight);
+				//this.camera = new Camera([0, 0, 10], [0, 0, -1], [0, 1, 0], this.canvasWidth, this.canvasHeight);
 				break;
 			case 3:
 				this.shapes = [
@@ -677,8 +737,8 @@ class Scene {
 					new Sphere([0.5, -1.2, 0.6], 0.6, COL_SILVER, 0.98, MAT_GLASS),
 					new Sphere([0.5, -1.2, 0.6], 0.55, COL_SILVER, 0.98, MAT_AIR),*/
 				];
-				/*new Bowl(this.shapes, [0, -1, 1], 1, 0.9, [0, 0, 1], COL_WHITE, 0.97, MAT_GLASS);
-				new Halfball(this.shapes, [0, -1, 1], 0.9, [0, 0, 1], 0.3, undefined, COL_WHITE, 0.97, MAT_WATER);
+				/*new Bowl(this.shapes, [0, -1, 1], 1, 0.9, [0, 0, 1], COL_WHITE, 0.97, MAT_GLASS);*/
+				new Halfball(this.shapes, [0, -1, 1], 0.9, [0, 0, 1], 0.3, undefined, COL_WHITE, 0.97, MAT_WATER);/*
 				new Box(this.shapes, [-0.1, -1, 0.15], [0.1, 0, 0], [0, 0.1, 0], [0.5, 0, 1.8], COL_COPPER, 0.1);
 				new Cuboctahedron(this.shapes, [-0.7, 1, 0], [1.2, 0, 0], [0, 1.2, 0], [0, 0, 1.2], COL_DEEP_BLUE, COL_DEEP_PINK, 0.3)*/
 				new Bowl(this.shapes, [-2.3, 1, 1], 1, 0.8, [0, 0, 1], COL_DEEP_BLUE, 0.3);
@@ -700,8 +760,19 @@ class Scene {
 			default:
 				break;
 		}
+		this.initLights();
+	}
 
-		//this.camera = new Camera([1, -4, 5], [0, 1, -0.9], [0, 0, 1], this.canvasWidth, this.canvasHeight);		
+	initLights() {
+		let totalIntensity = 0;
+		for (let l of lights) {
+			// for now, assuming all lights are discs
+			l.intensity = l.wattage * Math.PI * l.radius ** 2;
+			totalIntensity += l.intensity;
+		}
+		for (let l of lights) {
+			l.prob = l.intensity / totalIntensity;	// probability of being chosen as random light source
+		}
 	}
 
 	projectToCanvas(xyz) {
@@ -806,7 +877,7 @@ class Scene {
 			let normal = this.shapes[minShape].normal(intersection);
 
 			if (debug) {
-				console.log(`hitting shape ${minShape}, a ${this.shapes[minShape].type} with shine ${this.shapes[minShape].shine}`);
+				console.log(`hitting shape ${minShape}, a ${this.shapes[minShape].type} with reflectance ${this.shapes[minShape].reflectance}`);
 				console.log(`  material stack: ${material_stack}`)
 				let laserEnd = this.projectToCanvas(intersection);
 				if (laserEnd != undefined && ray.origin != this.camera.origin) {
@@ -835,25 +906,26 @@ class Scene {
 						//return undefined;
 					} else {
 						let reflectDir = vecPlus(ray.dir, vecScalar(2 * cosTheta1, normal));
-						let perturbDir;
-						for(let attempt = 0; attempt < 100; attempt++) {
-							perturbDir = vecPerturb(reflectDir);//, 0.01); //0.2);
-							if (vecDot(perturbDir, normal) > EPSILON) {
-								break;
-							}
-							if (attempt > 10) {
-								console.log(":O")
-							}
-							if (attempt == 99) {
-								perturbDir = reflectDir;
+						let perturbDir = reflectDir;
+						if (Math.random() > this.shapes[minShape].specular) {		// for Lambertian reflectance, perturb the vector
+							for(let attempt = 0; attempt < 100; attempt++) {
+								perturbDir = vecPerturb(reflectDir);//, 0.01); //0.2);
+								if (vecDot(perturbDir, normal) > EPSILON) {
+									break;
+								}
+								if (attempt > 10) {
+									console.log(":O")
+								}
+								if (attempt == 99) {
+									perturbDir = reflectDir;
+								}
 							}
 						}
-						//transmittedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine, material_stack);
-						transmittedColour = this.traceRay(new Ray(intersection, perturbDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine, material_stack);
+						transmittedColour = this.traceRay(new Ray(intersection, perturbDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].reflectance, material_stack);
 					}					
 				} else {
-					let eta1 = refr_index[material_stack[material_stack.length - 1]];		// current medium
-					let eta2 = (vecDot(ray.dir, normal) < 0) ? refr_index[this.shapes[minShape].material] : refr_index[material_stack[material_stack.length - 2]];	// enter or exit medium
+					let eta1 = matRefrIndex[material_stack[material_stack.length - 1]];		// current medium
+					let eta2 = (vecDot(ray.dir, normal) < 0) ? matRefrIndex[this.shapes[minShape].material] : matRefrIndex[material_stack[material_stack.length - 2]];	// enter or exit medium
 					if (eta2 == undefined) {
 						//throw new Error("exited all materials: check consistency of objects")
 					}
@@ -867,7 +939,7 @@ class Scene {
 							console.log(`total internal reflection`);
 						}
 						let reflectDir = vecPlus(ray.dir, vecScalar(2 * cosTheta1, normal));
-						transmittedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine, material_stack);
+						transmittedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].reflectance, material_stack);
 					} else {
 						let plusMinus = (cosTheta1 < 0) ? -1 : 1;		// used in refractDir to make sure angle is right depending on whether we're entering or exiting (because normal points out of surface)
 						let refractDir = vecPlus(vecScalar(etaRatio, ray.dir), vecScalar(etaRatio * cosTheta1 - plusMinus * Math.sqrt(cosTheta2Sq), normal));
@@ -892,9 +964,8 @@ class Scene {
 						//let reflectDir = vecPlus(ray.dir, vecScalar(2 * cosTheta1, normal));
 						let reflectance = 0.0;
 						let reflectedColour = COL_WHITE;
-						//let reflectedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, reflectance * importance * this.shapes[minShape].shine, material_stack);
 						
-						let refractedColour = this.traceRay(new Ray(intersection, refractDir), maxDist - minIntersectionDist, depth - 1, (1 - reflectance) * importance * this.shapes[minShape].shine, material_stack);
+						let refractedColour = this.traceRay(new Ray(intersection, refractDir), maxDist - minIntersectionDist, depth - 1, (1 - reflectance) * importance * this.shapes[minShape].reflectance, material_stack);
 						
 						for (let component of ["r", "g", "b"]) {
 							//transmittedColour[component] = Math.round(reflectance * reflectedColour[component] + (1 - reflectance) * refractedColour[component]);
@@ -903,17 +974,10 @@ class Scene {
 						transmittedColour = refractedColour;
 					}
 				}
-
-				/*if (vecDot(ray.dir, normal) > 0) {
-					//return COL_BLACK;
-				} else {
-          let reflectDir = vecMinus(ray.dir, vecScalar(2 * vecDot(ray.dir, normal), normal));
-					transmittedColour = this.traceRay(new Ray(intersection, reflectDir), maxDist - minIntersectionDist, depth - 1, importance * this.shapes[minShape].shine);
-				}*/
 			}
 
 			for (let component of ["r", "g", "b"]) {
-				rayCol[component] = Math.round((1 - this.shapes[minShape].shine) * shapeCol[component] + this.shapes[minShape].shine * transmittedColour[component]);
+				rayCol[component] = Math.round((1 - this.shapes[minShape].reflectance) * shapeCol[component] + this.shapes[minShape].reflectance * transmittedColour[component]);
 				if (rayCol[component] < 0) {
 					rayCol[component] = 0;
 				} else if (rayCol[component] > 255) {
@@ -926,8 +990,6 @@ class Scene {
 			console.log(`nothing there (ray at ${ray.origin} in direction ${ray.dir})`);
 		}
 		return COL_VERY_DARK_GREY;
-		//let fade = Math.floor(128 * Math.exp(-(maxDist / 100)));
-		//return { r: fade, g: fade, b: fade, a: 1 };
 	}
 }
 
@@ -1089,7 +1151,7 @@ function main() {
 	let now = Date.now();
 	
 	let tiles = [];
-	let tileSize = Math.floor(400 / SUB_SAMPLE);
+	let tileSize = Math.floor(200 / SUB_SAMPLE);
 	for (let y = 0; y < canvas.height / tileSize; y++) {
 		for (let x = 0; x < canvas.width / tileSize; x++) {
 			tiles.push([x * tileSize, y * tileSize]);
