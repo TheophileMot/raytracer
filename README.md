@@ -1,7 +1,8 @@
 # raytracer
 a ray tracer with photon mapping
 
-this is an old project and not very user friendly!
+This is an old project and not very user friendly! But it makes nice pictures:
+![Image of raytraced scene](https://octodex.github.com/images/ray.png)
 
 use SPACE to render
 
