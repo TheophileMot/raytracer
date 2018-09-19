@@ -2,7 +2,7 @@
 a ray tracer with photon mapping
 
 This is an old project and not very user friendly! But it makes nice pictures:
-![Image of raytraced scene](https://octodex.github.com/images/ray.png)
+![Image of raytraced scene](https://github.com/TheophileMot/raytracer/master/ray.png)
 
 use SPACE to render
 
