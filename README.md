@@ -1,5 +1,7 @@
 # raytracer
-a simple ray tracer with photon mapping
+a ray tracer with photon mapping
+
+this is an old project and not very user friendly!
 
 use SPACE to render
 
