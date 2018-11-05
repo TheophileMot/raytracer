@@ -10,6 +10,6 @@ Keyboard controls:
 
 ```
 SPACE to render
-WASD to move camera     [hold down shift to speed up]
-also QE to move camera  [             "             ]
+WASD to move camera  [hold down shift to speed up]
+ QE  to tilt camera  [             "             ]
 ```
