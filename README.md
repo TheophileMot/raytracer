@@ -8,7 +8,8 @@ This is an old project: not very user friendly and the code is disorganized! But
 
 Keyboard controls:
 
-```SPACE to render
+```
+SPACE to render
 WASD to move camera     [hold down shift to speed up]
 also QE to move camera  [             "             ]
 ```
